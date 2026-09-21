@@ -131,6 +131,19 @@ export type NutritionDaySnapshot = {
   };
 };
 
+export type HydrationEntry = {
+  id: string;
+  date: string;
+  milliliters: number;
+  createdAt: string;
+};
+
+export type HydrationSnapshot = {
+  date: string;
+  entries: HydrationEntry[];
+  totalMl: number;
+};
+
 export type TodaySnapshot = {
   activeWorkout: WorkoutRow | null;
   completedToday: number;
@@ -143,6 +156,7 @@ export type TodaySnapshot = {
   recoveryCompleteness: number;
   nutritionCalories: number;
   nutritionProtein: number;
+  hydrationMl: number;
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -337,6 +351,16 @@ async function database() {
 
         CREATE INDEX IF NOT EXISTS idx_nutrition_entries_date
           ON nutrition_entries(date, created_at);
+
+        CREATE TABLE IF NOT EXISTS hydration_entries (
+          id TEXT PRIMARY KEY NOT NULL,
+          date TEXT NOT NULL,
+          milliliters INTEGER NOT NULL CHECK(milliliters > 0 AND milliliters <= 5000),
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_hydration_entries_date
+          ON hydration_entries(date, created_at);
 
         CREATE TABLE IF NOT EXISTS sync_outbox (
           id TEXT PRIMARY KEY NOT NULL,
@@ -879,6 +903,71 @@ export async function deleteNutritionEntry(entryId: string) {
   return loadNutritionDay(existing.date);
 }
 
+export async function loadHydration(date = localDate()): Promise<HydrationSnapshot> {
+  parseDate(date);
+  const db = await database();
+  const rows = await db.getAllAsync<{
+    id: string;
+    date: string;
+    milliliters: number;
+    created_at: string;
+  }>(
+    "SELECT id, date, milliliters, created_at FROM hydration_entries WHERE date = ? ORDER BY created_at DESC",
+    date,
+  );
+  const entries = rows.map((row) => ({
+    id: row.id,
+    date: row.date,
+    milliliters: row.milliliters,
+    createdAt: row.created_at,
+  }));
+  return {
+    date,
+    entries,
+    totalMl: entries.reduce((sum, entry) => sum + entry.milliliters, 0),
+  };
+}
+
+export async function addHydration(milliliters: number, date = localDate()) {
+  parseDate(date);
+  if (!Number.isInteger(milliliters) || milliliters <= 0 || milliliters > 5000) {
+    throw new Error("La cantidad debe ser un número entero entre 1 y 5000 ml.");
+  }
+  const db = await database();
+  const entryId = id("water");
+  const createdAt = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "INSERT INTO hydration_entries (id, date, milliliters, created_at) VALUES (?, ?, ?, ?)",
+      entryId,
+      date,
+      milliliters,
+      createdAt,
+    );
+    await queue(db, "hydration_entry", entryId, "upsert", {
+      id: entryId,
+      date,
+      milliliters,
+      createdAt,
+    });
+  });
+  return loadHydration(date);
+}
+
+export async function deleteHydration(entryId: string) {
+  const db = await database();
+  const existing = await db.getFirstAsync<{ date: string }>(
+    "SELECT date FROM hydration_entries WHERE id = ?",
+    entryId,
+  );
+  if (!existing) throw new Error("Registro de hidratación no encontrado.");
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM hydration_entries WHERE id = ?", entryId);
+    await queue(db, "hydration_entry", entryId, "delete", { id: entryId, date: existing.date });
+  });
+  return loadHydration(existing.date);
+}
+
 export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
   const db = await database();
   await ensurePlanDays(db, date);
@@ -929,6 +1018,10 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     "SELECT SUM(calories) AS calories, SUM(protein) AS protein FROM nutrition_entries WHERE date = ?",
     date,
   );
+  const hydrationTotal = await db.getFirstAsync<{ total_ml: number | null }>(
+    "SELECT SUM(milliliters) AS total_ml FROM hydration_entries WHERE date = ?",
+    date,
+  );
 
   return {
     activeWorkout: activeWorkout ?? null,
@@ -942,6 +1035,7 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     recoveryCompleteness: recovery.completeness,
     nutritionCalories: nutritionTotals?.calories ?? 0,
     nutritionProtein: nutritionTotals?.protein ?? 0,
+    hydrationMl: hydrationTotal?.total_ml ?? 0,
   };
 }
 

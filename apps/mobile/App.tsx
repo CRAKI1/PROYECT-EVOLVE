@@ -35,6 +35,7 @@ const emptySnapshot: TodaySnapshot = {
   recoveryCompleteness: 0,
   nutritionCalories: 0,
   nutritionProtein: 0,
+  hydrationMl: 0,
 };
 
 const tabs: Array<{ id: Tab; label: string }> = [
@@ -129,7 +130,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.8</Text>
+            <Text style={styles.levelValue}>v0.9</Text>
           </View>
         </View>
 
@@ -225,8 +226,10 @@ export default function App() {
                     title="Nutrición"
                     body={
                       snapshot.nutritionCalories > 0 || snapshot.nutritionProtein > 0
-                        ? `${Math.round(snapshot.nutritionCalories)} kcal · ${Math.round(snapshot.nutritionProtein)} g proteína registrados`
-                        : "Todavía sin alimentos registrados hoy."
+                        ? `${Math.round(snapshot.nutritionCalories)} kcal · ${Math.round(snapshot.nutritionProtein)} g proteína · ${snapshot.hydrationMl} ml agua`
+                        : snapshot.hydrationMl > 0
+                          ? `${snapshot.hydrationMl} ml agua registrados`
+                          : "Todavía sin alimentos ni agua registrados hoy."
                     }
                   />
                   <MiniCard

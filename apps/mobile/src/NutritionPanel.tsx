@@ -14,6 +14,7 @@ import {
   type NutritionMeal,
 } from "./database";
 import { BarcodeNutritionFlow } from "./BarcodeNutritionFlow";
+import { HydrationTracker } from "./HydrationTracker";
 
 const meals: Array<{ id: NutritionMeal; label: string }> = [
   { id: "preworkout", label: "Pre" },
@@ -183,6 +184,8 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
           await onChanged();
         }}
       />
+
+      <HydrationTracker onChanged={onChanged} />
 
       <View style={styles.futureCard}>
         <Text style={styles.futureTitle}>Foto de comida</Text>
