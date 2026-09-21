@@ -722,8 +722,8 @@ export async function saveManualNutritionEntry(input: {
   const protein = scaled.protein;
   const carbs = scaled.carbs;
   const fat = scaled.fat;
-  const fiber = scaled.fiber;
-  if (calories === null || protein === null || carbs === null || fat === null) throw new Error("Macros incompletos.");
+  const fiber = scaled.fiber ?? null;
+  if (calories == null || protein == null || carbs == null || fat == null) throw new Error("Macros incompletos.");
 
   const db = await database();
   const entryId = id("nutrition");
@@ -1097,6 +1097,13 @@ export async function addExercise(workoutId: string, rawName: string) {
     workoutId,
   );
   if (!active) throw new Error("El entrenamiento ya no está activo.");
+
+  const duplicate = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM workout_exercises WHERE workout_id = ? AND context_key = ? LIMIT 1",
+    workoutId,
+    contextKey,
+  );
+  if (duplicate) throw new Error("Ese ejercicio ya está añadido en esta sesión.");
 
   const order = await db.getFirstAsync<{ next_order: number }>(
     "SELECT COALESCE(MAX(order_index), 0) + 1 AS next_order FROM workout_exercises WHERE workout_id = ?",
