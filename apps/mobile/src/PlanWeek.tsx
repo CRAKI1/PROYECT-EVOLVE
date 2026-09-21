@@ -16,7 +16,7 @@ import {
   type PlanSnapshot,
   type WeeklyPlanDay,
 } from "./database";
-import { pickAndStorePlanImage, removeStoredPlanImage } from "./media";
+import { pickAndStorePlanImage } from "./media";
 
 const labels: Record<number, string> = {
   1: "Lunes",
@@ -59,9 +59,7 @@ export function PlanWeek({ onChanged }: { onChanged: () => Promise<void> }) {
     try {
       setSavingWeekday(day.weekday);
       setError(null);
-      const previousPhoto = snapshot?.week.find((item) => item.weekday === day.weekday)?.photoUri ?? null;
       await saveWeeklyPlanDay(day.weekday, day.kind, day.title, day.description, day.photoUri);
-      if (previousPhoto && previousPhoto !== day.photoUri) removeStoredPlanImage(previousPhoto);
       await refresh();
       await onChanged();
     } catch (cause) {
