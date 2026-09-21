@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import { adherence } from "../../../src/domain";
 
 export type WorkoutRow = {
   id: string;
@@ -31,10 +32,45 @@ export type WorkoutExercise = WorkoutExerciseRow & {
   sets: WorkoutSetRow[];
 };
 
+export type PlanKind = "training" | "rest" | "unplanned";
+
+export type WeeklyPlanDay = {
+  weekday: number;
+  kind: PlanKind;
+  title: string;
+  description: string;
+};
+
+export type CalendarPlanDay = {
+  date: string;
+  kind: PlanKind;
+  title: string;
+  description: string;
+  planned: number;
+  completed: number;
+};
+
+export type PlanSnapshot = {
+  activatedOn: string | null;
+  week: WeeklyPlanDay[];
+  calendar: CalendarPlanDay[];
+  streak: {
+    current: number;
+    longest: number;
+    planned: number;
+    completed: number;
+    percentage: number | null;
+  };
+};
+
 export type TodaySnapshot = {
   activeWorkout: WorkoutRow | null;
   completedToday: number;
   pendingSync: number;
+  todayPlan: CalendarPlanDay | null;
+  streakCurrent: number;
+  streakLongest: number;
+  adherencePercentage: number | null;
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -45,6 +81,32 @@ function id(prefix: string) {
 
 function finiteOrNull(value: number | null) {
   return value === null || Number.isFinite(value);
+}
+
+function parseDate(date: string) {
+  const stamp = Date.parse(date + "T00:00:00Z");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0, 10) !== date) {
+    throw new Error("Fecha inválida.");
+  }
+  return new Date(stamp);
+}
+
+function addDays(date: string, amount: number) {
+  const parsed = parseDate(date);
+  parsed.setUTCDate(parsed.getUTCDate() + amount);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function weekday(date: string) {
+  return parseDate(date).getUTCDay();
+}
+
+function mondayOfWeek(date: string) {
+  const current = parseDate(date);
+  const day = current.getUTCDay();
+  const delta = day === 0 ? -6 : 1 - day;
+  current.setUTCDate(current.getUTCDate() + delta);
+  return current.toISOString().slice(0, 10);
 }
 
 export function localDate(now = new Date()) {
@@ -99,6 +161,27 @@ async function database() {
         CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise
           ON workout_sets(workout_id, exercise_key, set_index);
 
+        CREATE TABLE IF NOT EXISTS weekly_plan_days (
+          weekday INTEGER PRIMARY KEY NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+          kind TEXT NOT NULL CHECK(kind IN ('training', 'rest', 'unplanned')),
+          title TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS plan_meta (
+          id INTEGER PRIMARY KEY NOT NULL CHECK(id = 1),
+          activated_on TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS plan_days (
+          date TEXT PRIMARY KEY NOT NULL,
+          kind TEXT NOT NULL CHECK(kind IN ('training', 'rest', 'unplanned')),
+          title TEXT NOT NULL DEFAULT '',
+          description TEXT NOT NULL DEFAULT '',
+          planned INTEGER NOT NULL CHECK(planned IN (0, 1))
+        );
+
         CREATE TABLE IF NOT EXISTS daily_signals (
           date TEXT PRIMARY KEY NOT NULL,
           sleep_minutes INTEGER,
@@ -116,6 +199,16 @@ async function database() {
           created_at TEXT NOT NULL
         );
       `);
+
+      await db.runAsync("INSERT OR IGNORE INTO plan_meta (id, activated_on) VALUES (1, NULL)");
+      const now = new Date().toISOString();
+      for (let day = 0; day < 7; day += 1) {
+        await db.runAsync(
+          "INSERT OR IGNORE INTO weekly_plan_days (weekday, kind, title, description, updated_at) VALUES (?, 'unplanned', '', '', ?)",
+          day,
+          now,
+        );
+      }
       return db;
     });
   }
@@ -141,8 +234,178 @@ async function queue(
   );
 }
 
+async function ensurePlanDays(db: SQLite.SQLiteDatabase, today = localDate()) {
+  const meta = await db.getFirstAsync<{ activated_on: string | null }>(
+    "SELECT activated_on FROM plan_meta WHERE id = 1",
+  );
+  if (!meta?.activated_on) return;
+
+  const week = await db.getAllAsync<WeeklyPlanDay>(
+    "SELECT weekday, kind, title, description FROM weekly_plan_days",
+  );
+  const byWeekday = new Map(week.map((day) => [day.weekday, day]));
+  const horizon = addDays(today, 42);
+
+  for (let date = meta.activated_on; date <= horizon; date = addDays(date, 1)) {
+    const template = byWeekday.get(weekday(date));
+    if (!template) throw new Error("Plan semanal incompleto.");
+    await db.runAsync(
+      "INSERT OR IGNORE INTO plan_days (date, kind, title, description, planned) VALUES (?, ?, ?, ?, ?)",
+      date,
+      template.kind,
+      template.title,
+      template.description,
+      template.kind === "training" ? 1 : 0,
+    );
+  }
+}
+
+async function planMetrics(db: SQLite.SQLiteDatabase, today = localDate()) {
+  await ensurePlanDays(db, today);
+  const meta = await db.getFirstAsync<{ activated_on: string | null }>(
+    "SELECT activated_on FROM plan_meta WHERE id = 1",
+  );
+
+  if (!meta?.activated_on) {
+    return {
+      activatedOn: null,
+      current: 0,
+      longest: 0,
+      planned: 0,
+      completed: 0,
+      percentage: null as number | null,
+    };
+  }
+
+  const rows = await db.getAllAsync<CalendarPlanDay>(`
+    SELECT
+      p.date,
+      p.kind,
+      p.title,
+      p.description,
+      p.planned,
+      CASE WHEN p.kind = 'training' AND EXISTS (
+        SELECT 1 FROM workouts w
+        WHERE w.date = p.date AND w.status = 'completed'
+      ) THEN 1 ELSE 0 END AS completed
+    FROM plan_days p
+    WHERE p.date >= ? AND p.date < ?
+    ORDER BY p.date ASC
+  `, meta.activated_on, today);
+
+  const streak = adherence(
+    rows.map((row) => ({
+      date: row.date,
+      kind: row.kind,
+      planned: row.planned,
+      completed: row.completed,
+    })),
+    today,
+  );
+
+  return {
+    activatedOn: meta.activated_on,
+    ...streak,
+  };
+}
+
+export async function loadPlanSnapshot(today = localDate()): Promise<PlanSnapshot> {
+  const db = await database();
+  await ensurePlanDays(db, today);
+
+  const week = await db.getAllAsync<WeeklyPlanDay>(`
+    SELECT weekday, kind, title, description
+    FROM weekly_plan_days
+    ORDER BY CASE weekday WHEN 0 THEN 7 ELSE weekday END ASC
+  `);
+
+  const start = mondayOfWeek(today);
+  const end = addDays(start, 6);
+  const calendar = await db.getAllAsync<CalendarPlanDay>(`
+    SELECT
+      p.date,
+      p.kind,
+      p.title,
+      p.description,
+      p.planned,
+      CASE WHEN p.kind = 'training' AND EXISTS (
+        SELECT 1 FROM workouts w
+        WHERE w.date = p.date AND w.status = 'completed'
+      ) THEN 1 ELSE 0 END AS completed
+    FROM plan_days p
+    WHERE p.date BETWEEN ? AND ?
+    ORDER BY p.date ASC
+  `, start, end);
+
+  const metrics = await planMetrics(db, today);
+  return {
+    activatedOn: metrics.activatedOn,
+    week,
+    calendar,
+    streak: {
+      current: metrics.current,
+      longest: metrics.longest,
+      planned: metrics.planned,
+      completed: metrics.completed,
+      percentage: metrics.percentage,
+    },
+  };
+}
+
+export async function saveWeeklyPlanDay(
+  weekdayValue: number,
+  kind: PlanKind,
+  rawTitle: string,
+  rawDescription: string,
+  today = localDate(),
+) {
+  if (!Number.isInteger(weekdayValue) || weekdayValue < 0 || weekdayValue > 6) throw new Error("Día inválido.");
+  if (!["training", "rest", "unplanned"].includes(kind)) throw new Error("Tipo de día inválido.");
+
+  const title = rawTitle.trim().replace(/\s+/g, " ");
+  const description = rawDescription.trim();
+  if (kind === "training" && (title.length < 2 || title.length > 80)) {
+    throw new Error("Pon un nombre de 2 a 80 caracteres para el entrenamiento.");
+  }
+  if (description.length > 400) throw new Error("La descripción no puede superar 400 caracteres.");
+
+  const db = await database();
+  const updatedAt = new Date().toISOString();
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "UPDATE weekly_plan_days SET kind = ?, title = ?, description = ?, updated_at = ? WHERE weekday = ?",
+      kind,
+      kind === "training" ? title : "",
+      description,
+      updatedAt,
+      weekdayValue,
+    );
+
+    const meta = await db.getFirstAsync<{ activated_on: string | null }>(
+      "SELECT activated_on FROM plan_meta WHERE id = 1",
+    );
+    if (!meta?.activated_on && kind !== "unplanned") {
+      await db.runAsync("UPDATE plan_meta SET activated_on = ? WHERE id = 1", today);
+    }
+
+    await db.runAsync("DELETE FROM plan_days WHERE date >= ?", today);
+    await queue(db, "weekly_plan_day", String(weekdayValue), "upsert", {
+      weekday: weekdayValue,
+      kind,
+      title: kind === "training" ? title : "",
+      description,
+      effectiveFrom: today,
+    });
+  });
+
+  await ensurePlanDays(db, today);
+}
+
 export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
   const db = await database();
+  await ensurePlanDays(db, date);
+
   const activeWorkout = await db.getFirstAsync<WorkoutRow>(
     "SELECT id, date, title, status, started_at, completed_at FROM workouts WHERE date = ? AND status = 'active' ORDER BY started_at DESC LIMIT 1",
     date,
@@ -154,22 +417,48 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
   const outbox = await db.getFirstAsync<{ count: number }>(
     "SELECT COUNT(*) AS count FROM sync_outbox",
   );
+  const todayPlan = await db.getFirstAsync<CalendarPlanDay>(`
+    SELECT
+      p.date,
+      p.kind,
+      p.title,
+      p.description,
+      p.planned,
+      CASE WHEN p.kind = 'training' AND EXISTS (
+        SELECT 1 FROM workouts w
+        WHERE w.date = p.date AND w.status = 'completed'
+      ) THEN 1 ELSE 0 END AS completed
+    FROM plan_days p
+    WHERE p.date = ?
+  `, date);
+  const metrics = await planMetrics(db, date);
 
   return {
     activeWorkout: activeWorkout ?? null,
     completedToday: completed?.count ?? 0,
     pendingSync: outbox?.count ?? 0,
+    todayPlan: todayPlan ?? null,
+    streakCurrent: metrics.current,
+    streakLongest: metrics.longest,
+    adherencePercentage: metrics.percentage,
   };
 }
 
 export async function createQuickWorkout(date = localDate()) {
   const db = await database();
+  await ensurePlanDays(db, date);
+
   const alreadyActive = await db.getFirstAsync<{ id: string }>(
     "SELECT id FROM workouts WHERE date = ? AND status = 'active' LIMIT 1",
     date,
   );
   if (alreadyActive) return alreadyActive.id;
 
+  const planned = await db.getFirstAsync<{ kind: PlanKind; title: string }>(
+    "SELECT kind, title FROM plan_days WHERE date = ?",
+    date,
+  );
+  const title = planned?.kind === "training" && planned.title ? planned.title : "Sesión libre";
   const workoutId = id("workout");
   const startedAt = new Date().toISOString();
 
@@ -178,13 +467,13 @@ export async function createQuickWorkout(date = localDate()) {
       "INSERT INTO workouts (id, date, title, status, started_at, completed_at) VALUES (?, ?, ?, 'active', ?, NULL)",
       workoutId,
       date,
-      "Sesión libre",
+      title,
       startedAt,
     );
     await queue(db, "workout", workoutId, "upsert", {
       id: workoutId,
       date,
-      title: "Sesión libre",
+      title,
       status: "active",
       startedAt,
     });
