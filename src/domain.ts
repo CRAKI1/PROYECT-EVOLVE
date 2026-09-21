@@ -15,7 +15,6 @@ export function nextPrescription(p: Prescription, sessions: Exposure[], options:
   if (pain) return result("review", p.load, ["pain_reported"]);
   check(new Set(sessions.map(s => s.id)).size === sessions.length, "Duplicate session");
   const comparable = sessions.filter(s => s.contextKey === p.contextKey);
-  // Callers supply exposures oldest first; never skip a partial latest exposure.
   const recent = comparable.slice(-2);
   if (!recent.length) return result("hold", p.load, ["insufficient_data"]);
   for (const s of recent) for (const x of s.sets) {
@@ -57,7 +56,6 @@ export function adherence(days: PlanDay[], today: string) {
     const n = dayNumber(d.date);
     check(Number.isInteger(d.planned) && Number.isInteger(d.completed) && d.planned >= 0 && d.completed >= 0 && d.completed <= d.planned, "Invalid counts");
     if (n >= cutoff) continue;
-    // Require explicit neutral rows rather than treating missing history as success.
     if (prior !== undefined) check(n === prior + 1, "Incomplete calendar coverage");
     prior = n;
     if (d.kind === "unplanned" || d.excused) continue;

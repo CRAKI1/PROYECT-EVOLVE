@@ -4,15 +4,35 @@ Android-first personal performance system. Public source code; personal data mus
 
 ## Status
 
-Initial deterministic domain implementation, not an installable app. No backend has been provisioned and no AI or device integration is active.
+The repository now contains two working layers:
 
-Implemented: validated double-progression proposals, assisted-load direction, incomplete-session handling, explicit evidence, civil-date adherence, unit conversion, nutrition arithmetic and age-sensitive policy.
+1. A deterministic TypeScript domain core with 18 tests covering progression, streak/adherence logic, unit conversion, nutrition arithmetic and age-sensitive policy.
+2. An Expo/React Native Android shell with persistent SQLite storage, a Today dashboard, local workout creation/completion and a durable sync outbox.
 
-Run tests with Node.js 24+: `npm test`. No runtime dependencies or API credits required.
+No Supabase project, AI service, private health data, credentials or personal photos are committed.
+
+## Run the domain tests
+
+Requires Node.js 24+.
+
+```bash
+npm test
+```
+
+## Run the Android app
+
+The mobile package is in `apps/mobile` and targets Expo SDK 57 / React Native 0.86.
+
+```bash
+npm install
+npm run mobile:android
+```
+
+The first launch creates the local SQLite schema automatically. The app can create and finish a local workout without a backend connection.
 
 ## Architecture
 
-React Native/TypeScript mobile client → local SQLite and durable outbox → authenticated synchronization → PostgreSQL with owner-isolated access and private media. Independent domain engines supply evidence to a server-side contextual Coach. Native Android builds and device tests are required; a web deployment is not an Android delivery.
+React Native/TypeScript mobile client → local SQLite and durable outbox → authenticated synchronization → PostgreSQL with owner-isolated access and private media. Independent domain engines supply evidence to a server-side contextual Coach.
 
 Planned modules: onboarding; versioned programs; live workout; exercise library and substitutions; progression/PR; calendar; nutrition/manual/barcode/photo confirmation; meals/recipes/hydration; sleep/steps; check-ins/readiness; goals/scenarios; analytics/reviews; private body timeline; 3D avatar/body map; ranks/achievements; Coach actions; offline sync; export/deletion.
 
@@ -20,10 +40,11 @@ Planned modules: onboarding; versioned programs; live workout; exercise library 
 
 Never commit credentials, photos, real workout histories or health records. Unknown age/minors disable automated calorie restriction and appearance scoring. Photo analysis is optional and estimates are labeled. Game levels do not measure health. Recommendations are product heuristics, not clinical validation.
 
-## Next integration milestones
+## Next milestones
 
-1. Android shell, SQLite repositories and live logging.
-2. Database migrations, authentication, owner isolation and sync conflict tests.
-3. Nutrition/device adapters and deterministic analytics.
-4. Contextual AI with confirmed actions and budget controls.
-5. Licensed rigged 3D avatar and complete device acceptance tests.
+1. Expand live workout logging: exercises, sets, reps, load and RIR.
+2. Connect the verified progression engine to completed local exposures.
+3. Add Supabase migrations, authentication, owner isolation and conflict-safe sync.
+4. Add nutrition/device adapters and deterministic analytics.
+5. Add contextual AI with confirmed actions and budget controls.
+6. Add a licensed rigged 3D avatar and complete Android device acceptance tests.

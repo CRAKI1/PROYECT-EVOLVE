@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Project Evolve",
+    "slug": "project-evolve",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.projectevolve.app",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0D12"
+      }
+    },
+    "plugins": ["expo-sqlite"]
+  }
+}

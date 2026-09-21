@@ -1,8 +1,14 @@
 {
   "name": "project-evolve",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "workspaces": ["apps/mobile"],
   "engines": { "node": ">=24" },
-  "scripts": { "test": "node --test tests/*.test.ts" }
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "mobile:start": "npm --workspace @project-evolve/mobile run start",
+    "mobile:android": "npm --workspace @project-evolve/mobile run android",
+    "mobile:typecheck": "npm --workspace @project-evolve/mobile run typecheck"
+  }
 }
