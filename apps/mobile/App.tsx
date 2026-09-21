@@ -16,6 +16,7 @@ import {
   localDate,
   type TodaySnapshot,
 } from "./src/database";
+import { LiveWorkout } from "./src/LiveWorkout";
 
 type Tab = "today" | "training" | "nutrition" | "recovery" | "progress";
 
@@ -103,7 +104,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.2</Text>
+            <Text style={styles.levelValue}>v0.3</Text>
           </View>
         </View>
 
@@ -119,7 +120,11 @@ export default function App() {
             <Text style={styles.muted}>Preparando tu base privada local…</Text>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.content}
+            showsVerticalScrollIndicator={false}
+          >
             {tab === "today" ? (
               <>
                 <Text style={styles.eyebrow}>ESTADO DE HOY</Text>
@@ -138,8 +143,8 @@ export default function App() {
                   </Text>
                   <Text style={styles.cardBody}>
                     {snapshot.activeWorkout
-                      ? "La sesión está guardada en SQLite y seguirá disponible aunque cierres la app."
-                      : "Inicia una sesión libre. En el siguiente bloque añadiremos ejercicios, series, carga, repeticiones y RIR."}
+                      ? "La sesión, ejercicios y series están guardados en SQLite y siguen disponibles aunque cierres la app."
+                      : "Inicia una sesión local y registra ejercicios, series, carga, repeticiones y RIR sin depender de internet."}
                   </Text>
                   <PrimaryButton
                     label={snapshot.activeWorkout ? "Continuar sesión" : "Iniciar sesión"}
@@ -158,27 +163,25 @@ export default function App() {
             ) : null}
 
             {tab === "training" ? (
-              <>
-                <Text style={styles.eyebrow}>LIVE WORKOUT</Text>
-                <Text style={styles.hero}>
-                  {snapshot.activeWorkout ? snapshot.activeWorkout.title : "No hay una sesión activa."}
-                </Text>
-                <Card>
-                  <Text style={styles.cardTitle}>
-                    {snapshot.activeWorkout ? "Sesión en curso" : "Empieza cuando estés lista"}
-                  </Text>
-                  <Text style={styles.cardBody}>
-                    {snapshot.activeWorkout
-                      ? "Persistencia offline activa. Todavía no se generan progresiones hasta tener series comparables completas."
-                      : "El registro no crea una racha falsa ni una recomendación sin evidencia."}
-                  </Text>
-                  {snapshot.activeWorkout ? (
-                    <PrimaryButton label="Finalizar sesión" onPress={finishWorkout} disabled={busy} />
-                  ) : (
+              snapshot.activeWorkout ? (
+                <LiveWorkout
+                  workoutId={snapshot.activeWorkout.id}
+                  busy={busy}
+                  onChanged={refresh}
+                  onFinish={finishWorkout}
+                />
+              ) : (
+                <>
+                  <Text style={styles.eyebrow}>LIVE WORKOUT</Text>
+                  <Text style={styles.hero}>No hay una sesión activa.</Text>
+                  <Card>
+                    <Text style={styles.cardBody}>
+                      Empieza una sesión para registrar datos. No se crean progresiones ni récords sin evidencia.
+                    </Text>
                     <PrimaryButton label="Iniciar sesión" onPress={startWorkout} disabled={busy} />
-                  )}
-                </Card>
-              </>
+                  </Card>
+                </>
+              )
             ) : null}
 
             {tab === "nutrition" ? <ModulePlaceholder title="Nutrición" detail="Base lista para porciones, macros, alimentos, recetas y confirmación de escaneos." /> : null}
