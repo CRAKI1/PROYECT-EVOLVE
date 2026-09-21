@@ -14,6 +14,7 @@ import {
   type WorkoutExercise,
   type WorkoutSetRow,
 } from "./database";
+import { ProgressionPanel } from "./ProgressionPanel";
 
 export function LiveWorkout({
   workoutId,
@@ -102,7 +103,7 @@ export function LiveWorkout({
         <View style={styles.empty}>
           <Text style={styles.emptyTitle}>Todavía no hay ejercicios</Text>
           <Text style={styles.muted}>
-            Añade el primero arriba. No se precargan datos personales ni cargas inventadas.
+            Añade el primero arriba. Usa el mismo nombre en futuras sesiones para reutilizar su perfil de progresión; nombra distinto cada variante o máquina.
           </Text>
         </View>
       ) : null}
@@ -116,6 +117,12 @@ export function LiveWorkout({
             </View>
             <Text style={styles.setCount}>{exercise.sets.filter((set) => set.completed === 1).length}/{exercise.sets.length}</Text>
           </View>
+
+          <ProgressionPanel
+            contextKey={exercise.context_key}
+            exerciseName={exercise.name}
+            onChanged={refresh}
+          />
 
           <View style={styles.columns}>
             <Text style={[styles.columnText, styles.setColumn]}>#</Text>

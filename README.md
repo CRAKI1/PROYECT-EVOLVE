@@ -7,7 +7,7 @@ Android-first personal performance system. Public source code; personal data mus
 The repository now contains two working layers:
 
 1. A deterministic TypeScript domain core with 22 tests covering progression, streak/adherence logic, recovery signal classification, unit conversion, nutrition arithmetic and age-sensitive policy.
-2. An Expo/React Native Android app with persistent SQLite storage, a Today dashboard, version-safe weekly planning, rest-aware streaks, private plan photos, live workout logging, daily recovery signals and a durable sync outbox.
+2. An Expo/React Native Android app with persistent SQLite storage, a Today dashboard, version-safe weekly planning, rest-aware streaks, private plan photos, live workout logging, per-exercise double-progression profiles, daily recovery signals and a durable sync outbox.
 
 No Supabase project, AI service, private health data, credentials or personal photos are committed.
 
@@ -28,7 +28,7 @@ npm install
 npm run mobile:android
 ```
 
-The first launch creates and migrates the local SQLite schema automatically. The app can plan a week, attach private local photos, track streak/adherence, record recovery signals, log sets and finish a workout without a backend connection.
+The first launch creates and migrates the local SQLite schema automatically. The app can plan a week, attach private local photos, track streak/adherence, record recovery signals, log sets, configure real equipment load options and calculate evidence-backed progression proposals without a backend connection.
 
 ## Architecture
 
@@ -42,9 +42,8 @@ Never commit credentials, photos, real workout histories or health records. Unkn
 
 ## Next milestones
 
-1. Connect the verified progression engine to completed local exposures.
-2. Add exercise templates/substitutions and richer workout history.
-3. Add Supabase migrations, authentication, owner isolation and conflict-safe sync.
-4. Add nutrition/manual/barcode/photo-confirmation flows and device adapters.
-5. Add contextual AI with confirmed actions and budget controls.
-6. Add a licensed rigged 3D avatar and complete Android device acceptance tests.
+1. Add exercise templates/substitutions, PRs and richer workout history.
+2. Add Supabase migrations, authentication, owner isolation and conflict-safe sync.
+3. Add nutrition/manual/barcode/photo-confirmation flows and device adapters.
+4. Add contextual AI with confirmed actions and budget controls.
+5. Add a licensed rigged 3D avatar and complete Android device acceptance tests.

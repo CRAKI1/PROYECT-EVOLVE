@@ -1,5 +1,13 @@
 import * as SQLite from "expo-sqlite";
-import { adherence, recoveryState, type RecoverySignals, type RecoveryState } from "../../../src/domain";
+import {
+  adherence,
+  nextPrescription,
+  recoveryState,
+  type Exposure,
+  type Proposal,
+  type RecoverySignals,
+  type RecoveryState,
+} from "../../../src/domain";
 
 export type WorkoutRow = {
   id: string;
@@ -26,6 +34,26 @@ export type WorkoutExerciseRow = {
   workout_id: string;
   name: string;
   order_index: number;
+  context_key: string | null;
+};
+
+export type ExerciseProfile = {
+  contextKey: string;
+  name: string;
+  currentLoad: number;
+  sets: number;
+  minReps: number;
+  maxReps: number;
+  targetRir: number;
+  assisted: boolean;
+  loadOptions: number[];
+  updatedAt: string;
+};
+
+export type ExerciseProgressionSnapshot = {
+  profile: ExerciseProfile | null;
+  proposal: Proposal | null;
+  exposureCount: number;
 };
 
 export type WorkoutExercise = WorkoutExerciseRow & {
@@ -93,6 +121,46 @@ function finiteOrNull(value: number | null) {
   return value === null || Number.isFinite(value);
 }
 
+export function exerciseContextKey(rawName: string) {
+  const normalized = rawName.trim().replace(/\s+/g, " ").normalize("NFKC").toLocaleLowerCase("es");
+  if (normalized.length < 2 || normalized.length > 80) throw new Error("Usa un nombre de ejercicio entre 2 y 80 caracteres.");
+  return `exercise:${normalized}`;
+}
+
+function parseLoadOptions(json: string) {
+  const parsed: unknown = JSON.parse(json);
+  if (!Array.isArray(parsed) || !parsed.every(value => typeof value === "number" && Number.isFinite(value) && value >= 0)) {
+    throw new Error("Opciones de carga inválidas.");
+  }
+  return [...new Set(parsed)].sort((a, b) => a - b);
+}
+
+function profileFromRow(row: {
+  context_key: string;
+  name: string;
+  current_load: number;
+  prescribed_sets: number;
+  min_reps: number;
+  max_reps: number;
+  target_rir: number;
+  assisted: number;
+  load_options_json: string;
+  updated_at: string;
+}): ExerciseProfile {
+  return {
+    contextKey: row.context_key,
+    name: row.name,
+    currentLoad: row.current_load,
+    sets: row.prescribed_sets,
+    minReps: row.min_reps,
+    maxReps: row.max_reps,
+    targetRir: row.target_rir,
+    assisted: row.assisted === 1,
+    loadOptions: parseLoadOptions(row.load_options_json),
+    updatedAt: row.updated_at,
+  };
+}
+
 function parseDate(date: string) {
   const stamp = Date.parse(date + "T00:00:00Z");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(stamp) || new Date(stamp).toISOString().slice(0, 10) !== date) {
@@ -148,6 +216,7 @@ async function database() {
           workout_id TEXT NOT NULL,
           name TEXT NOT NULL,
           order_index INTEGER NOT NULL,
+          context_key TEXT,
           FOREIGN KEY(workout_id) REFERENCES workouts(id) ON DELETE CASCADE,
           UNIQUE(workout_id, order_index)
         );
@@ -170,6 +239,19 @@ async function database() {
 
         CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise
           ON workout_sets(workout_id, exercise_key, set_index);
+
+        CREATE TABLE IF NOT EXISTS exercise_profiles (
+          context_key TEXT PRIMARY KEY NOT NULL,
+          name TEXT NOT NULL,
+          current_load REAL NOT NULL CHECK(current_load >= 0),
+          prescribed_sets INTEGER NOT NULL CHECK(prescribed_sets > 0),
+          min_reps INTEGER NOT NULL CHECK(min_reps > 0),
+          max_reps INTEGER NOT NULL CHECK(max_reps >= min_reps),
+          target_rir REAL NOT NULL CHECK(target_rir BETWEEN 0 AND 10),
+          assisted INTEGER NOT NULL CHECK(assisted IN (0, 1)),
+          load_options_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS weekly_plan_days (
           weekday INTEGER PRIMARY KEY NOT NULL CHECK(weekday BETWEEN 0 AND 6),
@@ -211,6 +293,11 @@ async function database() {
           created_at TEXT NOT NULL
         );
       `);
+
+      const exerciseColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(workout_exercises)");
+      if (!exerciseColumns.some((column) => column.name === "context_key")) {
+        await db.execAsync("ALTER TABLE workout_exercises ADD COLUMN context_key TEXT;");
+      }
 
       const weeklyColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(weekly_plan_days)");
       if (!weeklyColumns.some((column) => column.name === "photo_uri")) {
@@ -586,10 +673,199 @@ export async function createQuickWorkout(date = localDate()) {
   return workoutId;
 }
 
+export async function loadExerciseProgression(contextKey: string): Promise<ExerciseProgressionSnapshot> {
+  const db = await database();
+  const row = await db.getFirstAsync<{
+    context_key: string;
+    name: string;
+    current_load: number;
+    prescribed_sets: number;
+    min_reps: number;
+    max_reps: number;
+    target_rir: number;
+    assisted: number;
+    load_options_json: string;
+    updated_at: string;
+  }>(
+    "SELECT context_key, name, current_load, prescribed_sets, min_reps, max_reps, target_rir, assisted, load_options_json, updated_at FROM exercise_profiles WHERE context_key = ?",
+    contextKey,
+  );
+
+  if (!row) return { profile: null, proposal: null, exposureCount: 0 };
+  const profile = profileFromRow(row);
+
+  const setRows = await db.getAllAsync<{
+    workout_id: string;
+    started_at: string;
+    set_index: number;
+    load_kg: number | null;
+    reps: number | null;
+    rir: number | null;
+    completed: number;
+  }>(`
+    SELECT
+      w.id AS workout_id,
+      w.started_at,
+      s.set_index,
+      s.load_kg,
+      s.reps,
+      s.rir,
+      s.completed
+    FROM workout_exercises e
+    JOIN workouts w ON w.id = e.workout_id
+    JOIN workout_sets s ON s.workout_id = e.workout_id AND s.exercise_key = e.id
+    WHERE e.context_key = ? AND w.status = 'completed'
+    ORDER BY w.started_at ASC, s.set_index ASC
+  `, contextKey);
+
+  const grouped = new Map<string, typeof setRows>();
+  for (const set of setRows) {
+    const current = grouped.get(set.workout_id) ?? [];
+    current.push(set);
+    grouped.set(set.workout_id, current);
+  }
+  const sessions = [...grouped.entries()];
+  const recent = sessions.slice(-2);
+  const evidence = recent.map(([workoutId]) => workoutId);
+
+  if (recent.some(([, sets]) => sets.some(set => set.load_kg === null || set.reps === null))) {
+    return {
+      profile,
+      exposureCount: sessions.length,
+      proposal: {
+        action: "hold",
+        load: profile.currentLoad,
+        reasons: ["incomplete_record"],
+        evidence,
+        confidence: evidence.length >= 2 ? "moderate" : "low",
+        policyVersion: "double-progression-v1",
+      },
+    };
+  }
+
+  const exposures: Exposure[] = sessions.map(([workoutId, sets]) => ({
+    id: workoutId,
+    contextKey,
+    sets: sets.map(set => ({
+      load: set.load_kg!,
+      reps: set.reps!,
+      rir: set.rir,
+      completed: set.completed === 1,
+    })),
+  }));
+
+  return {
+    profile,
+    exposureCount: sessions.length,
+    proposal: nextPrescription(
+      {
+        contextKey,
+        load: profile.currentLoad,
+        sets: profile.sets,
+        minReps: profile.minReps,
+        maxReps: profile.maxReps,
+        targetRir: profile.targetRir,
+        assisted: profile.assisted,
+      },
+      exposures,
+      profile.loadOptions,
+    ),
+  };
+}
+
+export async function saveExerciseProfile(input: {
+  contextKey: string;
+  name: string;
+  currentLoad: number;
+  sets: number;
+  minReps: number;
+  maxReps: number;
+  targetRir: number;
+  assisted: boolean;
+  loadOptions: number[];
+}) {
+  const expectedKey = exerciseContextKey(input.name);
+  if (expectedKey !== input.contextKey) throw new Error("El contexto del ejercicio cambió; vuelve a añadirlo con el nuevo nombre.");
+  if (!Number.isFinite(input.currentLoad) || input.currentLoad < 0) throw new Error("Carga actual inválida.");
+  if (!Number.isInteger(input.sets) || input.sets < 1 || input.sets > 20) throw new Error("Número de series inválido.");
+  if (!Number.isInteger(input.minReps) || !Number.isInteger(input.maxReps) || input.minReps < 1 || input.maxReps < input.minReps || input.maxReps > 100) {
+    throw new Error("Rango de repeticiones inválido.");
+  }
+  if (!Number.isFinite(input.targetRir) || input.targetRir < 0 || input.targetRir > 10) throw new Error("RIR objetivo inválido.");
+
+  const loadOptions = [...new Set(input.loadOptions)].sort((a, b) => a - b);
+  if (!loadOptions.length || loadOptions.some(value => !Number.isFinite(value) || value < 0)) throw new Error("Añade las cargas disponibles.");
+  if (!loadOptions.includes(input.currentLoad)) throw new Error("La carga actual debe estar dentro de las cargas disponibles.");
+
+  // Reuse domain validation before persisting a profile.
+  nextPrescription(
+    {
+      contextKey: input.contextKey,
+      load: input.currentLoad,
+      sets: input.sets,
+      minReps: input.minReps,
+      maxReps: input.maxReps,
+      targetRir: input.targetRir,
+      assisted: input.assisted,
+    },
+    [],
+    loadOptions,
+  );
+
+  const db = await database();
+  const updatedAt = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO exercise_profiles (
+        context_key, name, current_load, prescribed_sets, min_reps, max_reps,
+        target_rir, assisted, load_options_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(context_key) DO UPDATE SET
+        name = excluded.name,
+        current_load = excluded.current_load,
+        prescribed_sets = excluded.prescribed_sets,
+        min_reps = excluded.min_reps,
+        max_reps = excluded.max_reps,
+        target_rir = excluded.target_rir,
+        assisted = excluded.assisted,
+        load_options_json = excluded.load_options_json,
+        updated_at = excluded.updated_at`,
+      input.contextKey,
+      input.name,
+      input.currentLoad,
+      input.sets,
+      input.minReps,
+      input.maxReps,
+      input.targetRir,
+      input.assisted ? 1 : 0,
+      JSON.stringify(loadOptions),
+      updatedAt,
+    );
+    await queue(db, "exercise_profile", input.contextKey, "upsert", {
+      ...input,
+      loadOptions,
+      updatedAt,
+    });
+  });
+
+  return loadExerciseProgression(input.contextKey);
+}
+
+export async function adoptProgressionLoad(contextKey: string, load: number) {
+  const snapshot = await loadExerciseProgression(contextKey);
+  if (!snapshot.profile) throw new Error("Configura primero la progresión.");
+  if (!snapshot.profile.loadOptions.includes(load)) throw new Error("Esa carga no está disponible en el perfil.");
+
+  return saveExerciseProfile({
+    ...snapshot.profile,
+    currentLoad: load,
+  });
+}
+
 export async function loadWorkoutExercises(workoutId: string): Promise<WorkoutExercise[]> {
   const db = await database();
   const exercises = await db.getAllAsync<WorkoutExerciseRow>(
-    "SELECT id, workout_id, name, order_index FROM workout_exercises WHERE workout_id = ? ORDER BY order_index ASC",
+    "SELECT id, workout_id, name, order_index, context_key FROM workout_exercises WHERE workout_id = ? ORDER BY order_index ASC",
     workoutId,
   );
   const sets = await db.getAllAsync<WorkoutSetRow>(
@@ -606,7 +882,7 @@ export async function loadWorkoutExercises(workoutId: string): Promise<WorkoutEx
 export async function addExercise(workoutId: string, rawName: string) {
   const db = await database();
   const name = rawName.trim().replace(/\s+/g, " ");
-  if (name.length < 2 || name.length > 80) throw new Error("Usa un nombre de ejercicio entre 2 y 80 caracteres.");
+  const contextKey = exerciseContextKey(name);
 
   const active = await db.getFirstAsync<{ id: string }>(
     "SELECT id FROM workouts WHERE id = ? AND status = 'active'",
@@ -620,28 +896,38 @@ export async function addExercise(workoutId: string, rawName: string) {
   );
 
   const exerciseId = id("exercise");
-  const setId = id("set");
   const orderIndex = order?.next_order ?? 1;
+  const profile = await db.getFirstAsync<{ current_load: number; prescribed_sets: number }>(
+    "SELECT current_load, prescribed_sets FROM exercise_profiles WHERE context_key = ?",
+    contextKey,
+  );
+  const plannedSets = profile?.prescribed_sets ?? 1;
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      "INSERT INTO workout_exercises (id, workout_id, name, order_index) VALUES (?, ?, ?, ?)",
+      "INSERT INTO workout_exercises (id, workout_id, name, order_index, context_key) VALUES (?, ?, ?, ?, ?)",
       exerciseId,
       workoutId,
       name,
       orderIndex,
+      contextKey,
     );
-    await db.runAsync(
-      "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, completed) VALUES (?, ?, ?, 1, 0)",
-      setId,
-      workoutId,
-      exerciseId,
-    );
+    for (let setIndex = 1; setIndex <= plannedSets; setIndex += 1) {
+      await db.runAsync(
+        "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, load_kg, completed) VALUES (?, ?, ?, ?, ?, 0)",
+        id("set"),
+        workoutId,
+        exerciseId,
+        setIndex,
+        profile?.current_load ?? null,
+      );
+    }
     await queue(db, "workout_exercise", exerciseId, "upsert", {
       id: exerciseId,
       workoutId,
       name,
       orderIndex,
+      contextKey,
     });
   });
 
@@ -650,8 +936,8 @@ export async function addExercise(workoutId: string, rawName: string) {
 
 export async function addSet(workoutId: string, exerciseId: string) {
   const db = await database();
-  const exercise = await db.getFirstAsync<{ id: string }>(
-    "SELECT id FROM workout_exercises WHERE id = ? AND workout_id = ?",
+  const exercise = await db.getFirstAsync<{ id: string; context_key: string | null }>(
+    "SELECT id, context_key FROM workout_exercises WHERE id = ? AND workout_id = ?",
     exerciseId,
     workoutId,
   );
@@ -664,14 +950,21 @@ export async function addSet(workoutId: string, exerciseId: string) {
   );
   const setIndex = next?.next_index ?? 1;
   const setId = id("set");
+  const profile = exercise.context_key
+    ? await db.getFirstAsync<{ current_load: number }>(
+        "SELECT current_load FROM exercise_profiles WHERE context_key = ?",
+        exercise.context_key,
+      )
+    : null;
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, completed) VALUES (?, ?, ?, ?, 0)",
+      "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, load_kg, completed) VALUES (?, ?, ?, ?, ?, 0)",
       setId,
       workoutId,
       exerciseId,
       setIndex,
+      profile?.current_load ?? null,
     );
     await queue(db, "workout_set", setId, "upsert", {
       id: setId,
