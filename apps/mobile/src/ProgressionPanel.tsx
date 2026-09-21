@@ -75,6 +75,8 @@ export function ProgressionPanel({
     );
   }
 
+  const stableContextKey = contextKey;
+
   async function save() {
     try {
       setBusy(true);
@@ -85,13 +87,13 @@ export function ProgressionPanel({
       const maxValue = Number(maxReps.trim());
       const rirValue = Number(targetRir.trim().replace(",", "."));
       const loadOptions = options
-        .split(/[;,\s]+/)
+        .split(/[;\s]+/)
         .map(value => value.trim().replace(",", "."))
         .filter(Boolean)
         .map(Number);
 
       const next = await saveExerciseProfile({
-        contextKey,
+        contextKey: stableContextKey,
         name: exerciseName,
         currentLoad: loadValue,
         sets: setsValue,
@@ -115,7 +117,7 @@ export function ProgressionPanel({
     try {
       setBusy(true);
       setError(null);
-      const next = await adoptProgressionLoad(contextKey, loadValue);
+      const next = await adoptProgressionLoad(stableContextKey, loadValue);
       setSnapshot(next);
       setLoad(String(loadValue));
       await onChanged();
@@ -155,7 +157,7 @@ export function ProgressionPanel({
           <Field label="RIR objetivo" value={targetRir} onChange={setTargetRir} decimal />
         </View>
 
-        <Text style={styles.fieldLabel}>Cargas disponibles · separadas por espacio, coma o punto y coma</Text>
+        <Text style={styles.fieldLabel}>Cargas disponibles · separadas por espacio o punto y coma</Text>
         <TextInput
           value={options}
           onChangeText={setOptions}
