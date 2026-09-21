@@ -3,6 +3,7 @@ import {
   adherence,
   nextPrescription,
   recoveryState,
+  scaleNutrients,
   type Exposure,
   type Proposal,
   type RecoverySignals,
@@ -99,6 +100,35 @@ export type RecoverySnapshot = {
   state: RecoveryState;
 };
 
+export type NutritionMeal = "preworkout" | "breakfast" | "lunch" | "dinner" | "snack" | "other";
+
+export type NutritionEntry = {
+  id: string;
+  date: string;
+  meal: NutritionMeal;
+  name: string;
+  grams: number;
+  source: "manual" | "barcode" | "photo";
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number | null;
+  createdAt: string;
+};
+
+export type NutritionDaySnapshot = {
+  date: string;
+  entries: NutritionEntry[];
+  totals: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number;
+  };
+};
+
 export type TodaySnapshot = {
   activeWorkout: WorkoutRow | null;
   completedToday: number;
@@ -109,6 +139,8 @@ export type TodaySnapshot = {
   adherencePercentage: number | null;
   recoveryStatus: RecoveryState["status"];
   recoveryCompleteness: number;
+  nutritionCalories: number;
+  nutritionProtein: number;
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -283,6 +315,24 @@ async function database() {
           energy INTEGER CHECK(energy IS NULL OR (energy BETWEEN 1 AND 5)),
           soreness INTEGER CHECK(soreness IS NULL OR (soreness BETWEEN 1 AND 5))
         );
+
+        CREATE TABLE IF NOT EXISTS nutrition_entries (
+          id TEXT PRIMARY KEY NOT NULL,
+          date TEXT NOT NULL,
+          meal TEXT NOT NULL CHECK(meal IN ('preworkout', 'breakfast', 'lunch', 'dinner', 'snack', 'other')),
+          name TEXT NOT NULL,
+          grams REAL NOT NULL CHECK(grams > 0),
+          source TEXT NOT NULL CHECK(source IN ('manual', 'barcode', 'photo')),
+          calories REAL NOT NULL CHECK(calories >= 0),
+          protein REAL NOT NULL CHECK(protein >= 0),
+          carbs REAL NOT NULL CHECK(carbs >= 0),
+          fat REAL NOT NULL CHECK(fat >= 0),
+          fiber REAL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_nutrition_entries_date
+          ON nutrition_entries(date, created_at);
 
         CREATE TABLE IF NOT EXISTS sync_outbox (
           id TEXT PRIMARY KEY NOT NULL,
@@ -575,6 +625,158 @@ export async function saveRecovery(
   return { date, signals, state };
 }
 
+function nutritionEntryFromRow(row: {
+  id: string;
+  date: string;
+  meal: NutritionMeal;
+  name: string;
+  grams: number;
+  source: "manual" | "barcode" | "photo";
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  fiber: number | null;
+  created_at: string;
+}): NutritionEntry {
+  return {
+    id: row.id,
+    date: row.date,
+    meal: row.meal,
+    name: row.name,
+    grams: row.grams,
+    source: row.source,
+    calories: row.calories,
+    protein: row.protein,
+    carbs: row.carbs,
+    fat: row.fat,
+    fiber: row.fiber,
+    createdAt: row.created_at,
+  };
+}
+
+export async function loadNutritionDay(date = localDate()): Promise<NutritionDaySnapshot> {
+  parseDate(date);
+  const db = await database();
+  const rows = await db.getAllAsync<{
+    id: string;
+    date: string;
+    meal: NutritionMeal;
+    name: string;
+    grams: number;
+    source: "manual" | "barcode" | "photo";
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number | null;
+    created_at: string;
+  }>(
+    "SELECT id, date, meal, name, grams, source, calories, protein, carbs, fat, fiber, created_at FROM nutrition_entries WHERE date = ? ORDER BY created_at DESC",
+    date,
+  );
+  const entries = rows.map(nutritionEntryFromRow);
+  const totals = entries.reduce(
+    (acc, entry) => ({
+      calories: acc.calories + entry.calories,
+      protein: acc.protein + entry.protein,
+      carbs: acc.carbs + entry.carbs,
+      fat: acc.fat + entry.fat,
+      fiber: acc.fiber + (entry.fiber ?? 0),
+    }),
+    { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 },
+  );
+  return { date, entries, totals };
+}
+
+export async function saveManualNutritionEntry(input: {
+  meal: NutritionMeal;
+  name: string;
+  grams: number;
+  per100: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number | null;
+  };
+}, date = localDate()) {
+  parseDate(date);
+  const name = input.name.trim().replace(/\s+/g, " ");
+  if (name.length < 2 || name.length > 100) throw new Error("Usa un nombre de alimento entre 2 y 100 caracteres.");
+  if (!["preworkout", "breakfast", "lunch", "dinner", "snack", "other"].includes(input.meal)) throw new Error("Comida inválida.");
+  if (!Number.isFinite(input.grams) || input.grams <= 0 || input.grams > 10000) throw new Error("Cantidad inválida.");
+
+  const scaled = scaleNutrients(
+    {
+      calories: input.per100.calories,
+      protein: input.per100.protein,
+      carbs: input.per100.carbs,
+      fat: input.per100.fat,
+      fiber: input.per100.fiber,
+    },
+    input.grams,
+    100,
+  );
+  const calories = scaled.calories;
+  const protein = scaled.protein;
+  const carbs = scaled.carbs;
+  const fat = scaled.fat;
+  const fiber = scaled.fiber;
+  if (calories === null || protein === null || carbs === null || fat === null) throw new Error("Macros incompletos.");
+
+  const db = await database();
+  const entryId = id("nutrition");
+  const createdAt = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO nutrition_entries (
+        id, date, meal, name, grams, source, calories, protein, carbs, fat, fiber, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?)`,
+      entryId,
+      date,
+      input.meal,
+      name,
+      input.grams,
+      calories,
+      protein,
+      carbs,
+      fat,
+      fiber,
+      createdAt,
+    );
+    await queue(db, "nutrition_entry", entryId, "upsert", {
+      id: entryId,
+      date,
+      meal: input.meal,
+      name,
+      grams: input.grams,
+      source: "manual",
+      calories,
+      protein,
+      carbs,
+      fat,
+      fiber,
+      createdAt,
+    });
+  });
+  return loadNutritionDay(date);
+}
+
+export async function deleteNutritionEntry(entryId: string) {
+  const db = await database();
+  const existing = await db.getFirstAsync<{ id: string; date: string }>(
+    "SELECT id, date FROM nutrition_entries WHERE id = ?",
+    entryId,
+  );
+  if (!existing) throw new Error("Registro nutricional no encontrado.");
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM nutrition_entries WHERE id = ?", entryId);
+    await queue(db, "nutrition_entry", entryId, "delete", { id: entryId, date: existing.date });
+  });
+  return loadNutritionDay(existing.date);
+}
+
 export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
   const db = await database();
   await ensurePlanDays(db, date);
@@ -621,6 +823,10 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     energy: recoveryRow?.energy ?? null,
     soreness: recoveryRow?.soreness ?? null,
   });
+  const nutritionTotals = await db.getFirstAsync<{ calories: number | null; protein: number | null }>(
+    "SELECT SUM(calories) AS calories, SUM(protein) AS protein FROM nutrition_entries WHERE date = ?",
+    date,
+  );
 
   return {
     activeWorkout: activeWorkout ?? null,
@@ -632,6 +838,8 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     adherencePercentage: metrics.percentage,
     recoveryStatus: recovery.status,
     recoveryCompleteness: recovery.completeness,
+    nutritionCalories: nutritionTotals?.calories ?? 0,
+    nutritionProtein: nutritionTotals?.protein ?? 0,
   };
 }
 

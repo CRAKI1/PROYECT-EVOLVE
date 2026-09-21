@@ -19,6 +19,7 @@ import {
 import { LiveWorkout } from "./src/LiveWorkout";
 import { PlanWeek } from "./src/PlanWeek";
 import { RecoveryPanel } from "./src/RecoveryPanel";
+import { NutritionPanel } from "./src/NutritionPanel";
 
 type Tab = "today" | "plan" | "training" | "nutrition" | "recovery";
 
@@ -32,6 +33,8 @@ const emptySnapshot: TodaySnapshot = {
   adherencePercentage: null,
   recoveryStatus: "unknown",
   recoveryCompleteness: 0,
+  nutritionCalories: 0,
+  nutritionProtein: 0,
 };
 
 const tabs: Array<{ id: Tab; label: string }> = [
@@ -126,7 +129,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.6</Text>
+            <Text style={styles.levelValue}>v0.7</Text>
           </View>
         </View>
 
@@ -218,7 +221,14 @@ export default function App() {
                     title="Sesiones hoy"
                     body={snapshot.completedToday ? `${snapshot.completedToday} completada(s)` : "Todavía ninguna completada."}
                   />
-                  <MiniCard title="Nutrición" body="Registro manual, código de barras y foto con confirmación." />
+                  <MiniCard
+                    title="Nutrición"
+                    body={
+                      snapshot.nutritionCalories > 0 || snapshot.nutritionProtein > 0
+                        ? `${Math.round(snapshot.nutritionCalories)} kcal · ${Math.round(snapshot.nutritionProtein)} g proteína registrados`
+                        : "Todavía sin alimentos registrados hoy."
+                    }
+                  />
                   <MiniCard
                     title="Recuperación"
                     body={recoveryLabel(snapshot.recoveryStatus, snapshot.recoveryCompleteness)}
@@ -251,12 +261,7 @@ export default function App() {
               )
             ) : null}
 
-            {tab === "nutrition" ? (
-              <ModulePlaceholder
-                title="Nutrición"
-                detail="Base preparada para porciones, macros, alimentos, recetas, escaneo de código de barras y confirmación de fotos."
-              />
-            ) : null}
+            {tab === "nutrition" ? <NutritionPanel onChanged={refresh} /> : null}
 
             {tab === "recovery" ? <RecoveryPanel onChanged={refresh} /> : null}
           </ScrollView>
