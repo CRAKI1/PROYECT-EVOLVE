@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -167,6 +168,13 @@ export default function App() {
                   </Text>
                   <Text style={styles.cardTitle}>{planLabel}</Text>
                   <Text style={styles.cardBody}>{planBody}</Text>
+                  {snapshot.todayPlan?.photoUri ? (
+                    <Image
+                      source={{ uri: snapshot.todayPlan.photoUri }}
+                      style={styles.todayPlanImage}
+                      resizeMode="cover"
+                    />
+                  ) : null}
                   {snapshot.todayPlan?.kind === "training" ? (
                     <Text style={styles.planStatus}>
                       {snapshot.todayPlan.completed > 0 ? "✓ Cumplido hoy" : "Pendiente"}
@@ -396,6 +404,13 @@ const styles = StyleSheet.create({
   cardTitle: { color: "#F4F7FB", fontSize: 22, fontWeight: "900" },
   cardBody: { color: "#AAB4C2", fontSize: 14, lineHeight: 21 },
   planStatus: { color: "#AFCBEE", fontSize: 12, fontWeight: "900" },
+  todayPlanImage: {
+    width: "100%",
+    height: 180,
+    borderRadius: 16,
+    backgroundColor: "#0B1018",
+    marginTop: 2,
+  },
   primaryButton: {
     backgroundColor: "#2E8BFF",
     minHeight: 48,
