@@ -15,6 +15,8 @@ import {
 } from "./database";
 import { BarcodeNutritionFlow } from "./BarcodeNutritionFlow";
 import { HydrationTracker } from "./HydrationTracker";
+import { PhotoNutritionFlow } from "./PhotoNutritionFlow";
+import { removeStoredNutritionImage } from "./media";
 
 const meals: Array<{ id: NutritionMeal; label: string }> = [
   { id: "preworkout", label: "Pre" },
@@ -92,11 +94,12 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
     }
   }
 
-  async function remove(entryId: string) {
+  async function remove(entryId: string, photoUri: string | null) {
     try {
       setBusy(true);
       setError(null);
       setSnapshot(await deleteNutritionEntry(entryId));
+      if (photoUri) removeStoredNutritionImage(photoUri);
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No se pudo borrar el registro.");
@@ -187,12 +190,13 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
 
       <HydrationTracker onChanged={onChanged} />
 
-      <View style={styles.futureCard}>
-        <Text style={styles.futureTitle}>Foto de comida</Text>
-        <Text style={styles.caption}>
-          Siguiente adaptador: foto con estimación y confirmación manual antes de guardar.
-        </Text>
-      </View>
+      <PhotoNutritionFlow
+        meal={meal}
+        onSaved={async (next) => {
+          setSnapshot(next);
+          await onChanged();
+        }}
+      />
 
       <View style={styles.list}>
         <Text style={styles.listTitle}>Hoy · {snapshot?.entries.length ?? 0} registros</Text>
@@ -204,11 +208,12 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
               <Text style={styles.entryMeta}>
                 {round1(entry.grams)} g · {Math.round(entry.calories)} kcal · P {round1(entry.protein)} · C {round1(entry.carbs)} · G {round1(entry.fat)}
                 {entry.source === "barcode" && entry.barcode ? ` · código ${entry.barcode}` : ""}
+                {entry.source === "photo" ? " · foto" : ""}
               </Text>
             </View>
             <Pressable
               disabled={busy}
-              onPress={() => void remove(entry.id)}
+              onPress={() => void remove(entry.id, entry.photoUri)}
               style={styles.deleteButton}
             >
               <Text style={styles.deleteText}>Borrar</Text>

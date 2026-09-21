@@ -17,8 +17,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Project Evolve accede a tus fotos solo para adjuntar una imagen privada a tu plan semanal.",
-          "microphonePermission": false
+          "photosPermission": "Project Evolve accede a tus fotos sólo cuando decides adjuntar una imagen privada.",
+          "microphonePermission": false,
+          "cameraPermission": "Project Evolve usa la cámara sólo cuando decides tomar una foto para tu registro."
         }
       ],
       [

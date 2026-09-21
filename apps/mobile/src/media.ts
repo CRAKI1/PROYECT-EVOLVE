@@ -41,3 +41,50 @@ export function removeStoredPlanImage(uri: string | null | undefined) {
     // Cleanup is best-effort; the plan record remains authoritative.
   }
 }
+
+
+async function storeNutritionAsset(asset: ImagePicker.ImagePickerAsset) {
+  const directory = new Directory(Paths.document, "nutrition-media");
+  directory.create({ idempotent: true, intermediates: true });
+  const extension = safeExtension(asset.fileName, asset.uri, asset.mimeType);
+  const destination = new File(directory, `meal-${Date.now()}.${extension}`);
+  const source = new File(asset.uri);
+  await source.copy(destination);
+  return destination.uri;
+}
+
+export async function pickAndStoreNutritionImage(
+  source: "camera" | "library",
+): Promise<string | null> {
+  if (source === "camera") {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) throw new Error("La cámara no tiene permiso.");
+  }
+
+  const result = source === "camera"
+    ? await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        quality: 0.82,
+      })
+    : await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        quality: 0.82,
+      });
+
+  if (result.canceled) return null;
+  const asset = result.assets[0];
+  if (!asset) return null;
+  return storeNutritionAsset(asset);
+}
+
+export function removeStoredNutritionImage(uri: string | null | undefined) {
+  if (!uri || !uri.includes("/nutrition-media/")) return;
+  try {
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch {
+    // Best-effort cleanup. Database history remains authoritative.
+  }
+}

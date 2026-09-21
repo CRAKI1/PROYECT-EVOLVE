@@ -116,6 +116,7 @@ export type NutritionEntry = {
   fiber: number | null;
   barcode: string | null;
   brand: string | null;
+  photoUri: string | null;
   createdAt: string;
 };
 
@@ -346,6 +347,7 @@ async function database() {
           fiber REAL,
           barcode TEXT,
           brand TEXT,
+          photo_uri TEXT,
           created_at TEXT NOT NULL
         );
 
@@ -392,6 +394,9 @@ async function database() {
       }
       if (!nutritionColumns.some((column) => column.name === "brand")) {
         await db.execAsync("ALTER TABLE nutrition_entries ADD COLUMN brand TEXT;");
+      }
+      if (!nutritionColumns.some((column) => column.name === "photo_uri")) {
+        await db.execAsync("ALTER TABLE nutrition_entries ADD COLUMN photo_uri TEXT;");
       }
 
       await db.runAsync("INSERT OR IGNORE INTO plan_meta (id, activated_on) VALUES (1, NULL)");
@@ -675,6 +680,7 @@ function nutritionEntryFromRow(row: {
   fiber: number | null;
   barcode: string | null;
   brand: string | null;
+  photo_uri: string | null;
   created_at: string;
 }): NutritionEntry {
   return {
@@ -691,6 +697,7 @@ function nutritionEntryFromRow(row: {
     fiber: row.fiber,
     barcode: row.barcode,
     brand: row.brand,
+    photoUri: row.photo_uri,
     createdAt: row.created_at,
   };
 }
@@ -712,9 +719,10 @@ export async function loadNutritionDay(date = localDate()): Promise<NutritionDay
     fiber: number | null;
     barcode: string | null;
     brand: string | null;
+    photo_uri: string | null;
     created_at: string;
   }>(
-    "SELECT id, date, meal, name, grams, source, calories, protein, carbs, fat, fiber, barcode, brand, created_at FROM nutrition_entries WHERE date = ? ORDER BY created_at DESC",
+    "SELECT id, date, meal, name, grams, source, calories, protein, carbs, fat, fiber, barcode, brand, photo_uri, created_at FROM nutrition_entries WHERE date = ? ORDER BY created_at DESC",
     date,
   );
   const entries = rows.map(nutritionEntryFromRow);
@@ -901,6 +909,87 @@ export async function deleteNutritionEntry(entryId: string) {
     await queue(db, "nutrition_entry", entryId, "delete", { id: entryId, date: existing.date });
   });
   return loadNutritionDay(existing.date);
+}
+
+export async function savePhotoNutritionEntry(input: {
+  meal: NutritionMeal;
+  photoUri: string;
+  name: string;
+  grams: number;
+  per100: {
+    calories: number;
+    protein: number;
+    carbs: number;
+    fat: number;
+    fiber: number | null;
+  };
+}, date = localDate()) {
+  parseDate(date);
+  const name = input.name.trim().replace(/\s+/g, " ");
+  if (!input.photoUri.startsWith("file://") || !input.photoUri.includes("/nutrition-media/")) {
+    throw new Error("La foto debe estar almacenada de forma privada en la app.");
+  }
+  if (name.length < 2 || name.length > 100) throw new Error("Usa un nombre de alimento entre 2 y 100 caracteres.");
+  if (!["preworkout", "breakfast", "lunch", "dinner", "snack", "other"].includes(input.meal)) throw new Error("Comida inválida.");
+  if (!Number.isFinite(input.grams) || input.grams <= 0 || input.grams > 10000) throw new Error("Cantidad inválida.");
+
+  const scaled = scaleNutrients(
+    {
+      calories: input.per100.calories,
+      protein: input.per100.protein,
+      carbs: input.per100.carbs,
+      fat: input.per100.fat,
+      fiber: input.per100.fiber,
+    },
+    input.grams,
+    100,
+  );
+  const calories = scaled.calories;
+  const protein = scaled.protein;
+  const carbs = scaled.carbs;
+  const fat = scaled.fat;
+  const fiber = scaled.fiber ?? null;
+  if (calories == null || protein == null || carbs == null || fat == null) throw new Error("Completa los macros antes de confirmar.");
+
+  const db = await database();
+  const entryId = id("nutrition");
+  const createdAt = new Date().toISOString();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO nutrition_entries (
+        id, date, meal, name, grams, source, calories, protein, carbs, fat, fiber,
+        barcode, brand, photo_uri, created_at
+      ) VALUES (?, ?, ?, ?, ?, 'photo', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
+      entryId,
+      date,
+      input.meal,
+      name,
+      input.grams,
+      calories,
+      protein,
+      carbs,
+      fat,
+      fiber,
+      input.photoUri,
+      createdAt,
+    );
+    await queue(db, "nutrition_entry", entryId, "upsert", {
+      id: entryId,
+      date,
+      meal: input.meal,
+      name,
+      grams: input.grams,
+      source: "photo",
+      photoUri: input.photoUri,
+      calories,
+      protein,
+      carbs,
+      fat,
+      fiber,
+      createdAt,
+    });
+  });
+  return loadNutritionDay(date);
 }
 
 export async function loadHydration(date = localDate()): Promise<HydrationSnapshot> {

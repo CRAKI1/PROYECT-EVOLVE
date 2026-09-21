@@ -7,7 +7,7 @@ Android-first personal performance system. Public source code; personal data mus
 The repository now contains two working layers:
 
 1. A deterministic TypeScript domain core with 22 tests covering progression, streak/adherence logic, recovery signal classification, unit conversion, nutrition arithmetic and age-sensitive policy.
-2. An Expo/React Native Android app with persistent SQLite storage, a Today dashboard, version-safe weekly planning, rest-aware streaks, private plan photos, live workout logging, per-exercise double-progression profiles, daily recovery signals, neutral manual nutrition/macros, barcode lookup with explicit confirmation, hydration logging and a durable sync outbox.
+2. An Expo/React Native Android app with persistent SQLite storage, a Today dashboard, version-safe weekly planning, rest-aware streaks, private plan photos, live workout logging, per-exercise double-progression profiles, daily recovery signals, neutral manual nutrition/macros, barcode lookup with explicit confirmation, private meal-photo evidence, hydration logging and a durable sync outbox.
 
 No Supabase project, AI service, private health data, credentials or personal photos are committed.
 
@@ -28,7 +28,7 @@ npm install
 npm run mobile:android
 ```
 
-The first launch creates and migrates the local SQLite schema automatically. The app can plan a week, attach private local photos, track streak/adherence, record recovery signals, log sets, configure real equipment load options, calculate evidence-backed progression proposals, log manual nutrition/macros and scan packaged-food barcodes with explicit confirmation and record hydration.
+The first launch creates and migrates the local SQLite schema automatically. The app can plan a week, attach private local photos, track streak/adherence, record recovery signals, log sets, configure real equipment load options, calculate evidence-backed progression proposals, log manual nutrition/macros and scan packaged-food barcodes with explicit confirmation, attach private meal photos and record hydration.
 
 ## Architecture
 
@@ -44,6 +44,6 @@ Never commit credentials, photos, real workout histories or health records. Unkn
 
 1. Add exercise templates/substitutions, PRs and richer workout history.
 2. Add Supabase migrations, authentication, owner isolation and conflict-safe sync.
-3. Add photo-confirmation nutrition, recipes and device integrations.
+3. Connect an AI meal-photo analysis adapter, then add recipes and device integrations.
 4. Add contextual AI with confirmed actions and budget controls.
 5. Add a licensed rigged 3D avatar and complete Android device acceptance tests.
