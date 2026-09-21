@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-debug-apk:
+  build-standalone-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -47,21 +47,25 @@ jobs:
           sed -i 's#services.gradle.org/distributions#downloads.gradle.org/distributions#' apps/mobile/android/gradle/wrapper/gradle-wrapper.properties
           echo 'networkTimeout=120000' >> apps/mobile/android/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Build debug APK
+      - name: Build standalone release APK
         working-directory: apps/mobile/android
+        env:
+          NODE_ENV: production
         run: |
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon
+          ./gradlew :app:assembleRelease --no-daemon
 
-      - name: Rename APK
+      - name: Locate and rename APK
         run: |
           mkdir -p dist
-          cp apps/mobile/android/app/build/outputs/apk/debug/app-debug.apk dist/project-evolve-debug.apk
+          APK_PATH="$(find apps/mobile/android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          test -n "$APK_PATH"
+          cp "$APK_PATH" dist/project-evolve-standalone.apk
 
-      - name: Upload APK
+      - name: Upload standalone APK
         uses: actions/upload-artifact@v4
         with:
-          name: project-evolve-android-debug
-          path: dist/project-evolve-debug.apk
+          name: project-evolve-android-standalone
+          path: dist/project-evolve-standalone.apk
           if-no-files-found: error
           retention-days: 14
