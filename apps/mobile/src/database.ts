@@ -408,14 +408,19 @@ export async function saveWeeklyPlanDay(
       await db.runAsync("UPDATE plan_meta SET activated_on = ? WHERE id = 1", today);
     }
 
-    await db.runAsync("DELETE FROM plan_days WHERE date >= ?", today);
+    const startedToday = await db.getFirstAsync<{ id: string }>(
+      "SELECT id FROM workouts WHERE date = ? LIMIT 1",
+      today,
+    );
+    const effectiveFrom = startedToday ? addDays(today, 1) : today;
+    await db.runAsync("DELETE FROM plan_days WHERE date >= ?", effectiveFrom);
     await queue(db, "weekly_plan_day", String(weekdayValue), "upsert", {
       weekday: weekdayValue,
       kind,
       title: kind === "training" ? title : "",
       description,
       photoUri,
-      effectiveFrom: today,
+      effectiveFrom,
     });
   });
 
