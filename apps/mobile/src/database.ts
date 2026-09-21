@@ -9,6 +9,28 @@ export type WorkoutRow = {
   completed_at: string | null;
 };
 
+export type WorkoutSetRow = {
+  id: string;
+  workout_id: string;
+  exercise_key: string;
+  set_index: number;
+  load_kg: number | null;
+  reps: number | null;
+  rir: number | null;
+  completed: 0 | 1;
+};
+
+export type WorkoutExerciseRow = {
+  id: string;
+  workout_id: string;
+  name: string;
+  order_index: number;
+};
+
+export type WorkoutExercise = WorkoutExerciseRow & {
+  sets: WorkoutSetRow[];
+};
+
 export type TodaySnapshot = {
   activeWorkout: WorkoutRow | null;
   completedToday: number;
@@ -19,6 +41,10 @@ let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function finiteOrNull(value: number | null) {
+  return value === null || Number.isFinite(value);
 }
 
 export function localDate(now = new Date()) {
@@ -45,6 +71,18 @@ async function database() {
         CREATE INDEX IF NOT EXISTS idx_workouts_date_status
           ON workouts(date, status);
 
+        CREATE TABLE IF NOT EXISTS workout_exercises (
+          id TEXT PRIMARY KEY NOT NULL,
+          workout_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          order_index INTEGER NOT NULL,
+          FOREIGN KEY(workout_id) REFERENCES workouts(id) ON DELETE CASCADE,
+          UNIQUE(workout_id, order_index)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_workout_exercises_workout
+          ON workout_exercises(workout_id, order_index);
+
         CREATE TABLE IF NOT EXISTS workout_sets (
           id TEXT PRIMARY KEY NOT NULL,
           workout_id TEXT NOT NULL,
@@ -57,6 +95,9 @@ async function database() {
           FOREIGN KEY(workout_id) REFERENCES workouts(id) ON DELETE CASCADE,
           UNIQUE(workout_id, exercise_key, set_index)
         );
+
+        CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise
+          ON workout_sets(workout_id, exercise_key, set_index);
 
         CREATE TABLE IF NOT EXISTS daily_signals (
           date TEXT PRIMARY KEY NOT NULL,
@@ -150,6 +191,135 @@ export async function createQuickWorkout(date = localDate()) {
   });
 
   return workoutId;
+}
+
+export async function loadWorkoutExercises(workoutId: string): Promise<WorkoutExercise[]> {
+  const db = await database();
+  const exercises = await db.getAllAsync<WorkoutExerciseRow>(
+    "SELECT id, workout_id, name, order_index FROM workout_exercises WHERE workout_id = ? ORDER BY order_index ASC",
+    workoutId,
+  );
+  const sets = await db.getAllAsync<WorkoutSetRow>(
+    "SELECT id, workout_id, exercise_key, set_index, load_kg, reps, rir, completed FROM workout_sets WHERE workout_id = ? ORDER BY exercise_key ASC, set_index ASC",
+    workoutId,
+  );
+
+  return exercises.map((exercise) => ({
+    ...exercise,
+    sets: sets.filter((set) => set.exercise_key === exercise.id),
+  }));
+}
+
+export async function addExercise(workoutId: string, rawName: string) {
+  const db = await database();
+  const name = rawName.trim().replace(/\s+/g, " ");
+  if (name.length < 2 || name.length > 80) throw new Error("Usa un nombre de ejercicio entre 2 y 80 caracteres.");
+
+  const active = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM workouts WHERE id = ? AND status = 'active'",
+    workoutId,
+  );
+  if (!active) throw new Error("El entrenamiento ya no está activo.");
+
+  const order = await db.getFirstAsync<{ next_order: number }>(
+    "SELECT COALESCE(MAX(order_index), 0) + 1 AS next_order FROM workout_exercises WHERE workout_id = ?",
+    workoutId,
+  );
+
+  const exerciseId = id("exercise");
+  const setId = id("set");
+  const orderIndex = order?.next_order ?? 1;
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "INSERT INTO workout_exercises (id, workout_id, name, order_index) VALUES (?, ?, ?, ?)",
+      exerciseId,
+      workoutId,
+      name,
+      orderIndex,
+    );
+    await db.runAsync(
+      "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, completed) VALUES (?, ?, ?, 1, 0)",
+      setId,
+      workoutId,
+      exerciseId,
+    );
+    await queue(db, "workout_exercise", exerciseId, "upsert", {
+      id: exerciseId,
+      workoutId,
+      name,
+      orderIndex,
+    });
+  });
+
+  return exerciseId;
+}
+
+export async function addSet(workoutId: string, exerciseId: string) {
+  const db = await database();
+  const exercise = await db.getFirstAsync<{ id: string }>(
+    "SELECT id FROM workout_exercises WHERE id = ? AND workout_id = ?",
+    exerciseId,
+    workoutId,
+  );
+  if (!exercise) throw new Error("Ejercicio no encontrado.");
+
+  const next = await db.getFirstAsync<{ next_index: number }>(
+    "SELECT COALESCE(MAX(set_index), 0) + 1 AS next_index FROM workout_sets WHERE workout_id = ? AND exercise_key = ?",
+    workoutId,
+    exerciseId,
+  );
+  const setIndex = next?.next_index ?? 1;
+  const setId = id("set");
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "INSERT INTO workout_sets (id, workout_id, exercise_key, set_index, completed) VALUES (?, ?, ?, ?, 0)",
+      setId,
+      workoutId,
+      exerciseId,
+      setIndex,
+    );
+    await queue(db, "workout_set", setId, "upsert", {
+      id: setId,
+      workoutId,
+      exerciseId,
+      setIndex,
+      completed: false,
+    });
+  });
+
+  return setId;
+}
+
+export async function saveSet(
+  workoutId: string,
+  setId: string,
+  values: { loadKg: number | null; reps: number; rir: number | null },
+) {
+  if (!finiteOrNull(values.loadKg) || (values.loadKg ?? 0) < 0) throw new Error("Carga inválida.");
+  if (!Number.isInteger(values.reps) || values.reps < 0 || values.reps > 200) throw new Error("Repeticiones inválidas.");
+  if (!finiteOrNull(values.rir) || (values.rir !== null && (values.rir < 0 || values.rir > 10))) throw new Error("RIR debe estar entre 0 y 10.");
+
+  const db = await database();
+  const result = await db.runAsync(
+    "UPDATE workout_sets SET load_kg = ?, reps = ?, rir = ?, completed = 1 WHERE id = ? AND workout_id = ?",
+    values.loadKg,
+    values.reps,
+    values.rir,
+    setId,
+    workoutId,
+  );
+  if (result.changes !== 1) throw new Error("Serie no encontrada.");
+
+  await queue(db, "workout_set", setId, "upsert", {
+    id: setId,
+    workoutId,
+    loadKg: values.loadKg,
+    reps: values.reps,
+    rir: values.rir,
+    completed: true,
+  });
 }
 
 export async function completeWorkout(workoutId: string) {
