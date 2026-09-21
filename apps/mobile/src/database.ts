@@ -39,6 +39,7 @@ export type WeeklyPlanDay = {
   kind: PlanKind;
   title: string;
   description: string;
+  photoUri: string | null;
 };
 
 export type CalendarPlanDay = {
@@ -46,6 +47,7 @@ export type CalendarPlanDay = {
   kind: PlanKind;
   title: string;
   description: string;
+  photoUri: string | null;
   planned: number;
   completed: number;
 };
@@ -166,6 +168,7 @@ async function database() {
           kind TEXT NOT NULL CHECK(kind IN ('training', 'rest', 'unplanned')),
           title TEXT NOT NULL DEFAULT '',
           description TEXT NOT NULL DEFAULT '',
+          photo_uri TEXT,
           updated_at TEXT NOT NULL
         );
 
@@ -179,6 +182,7 @@ async function database() {
           kind TEXT NOT NULL CHECK(kind IN ('training', 'rest', 'unplanned')),
           title TEXT NOT NULL DEFAULT '',
           description TEXT NOT NULL DEFAULT '',
+          photo_uri TEXT,
           planned INTEGER NOT NULL CHECK(planned IN (0, 1))
         );
 
@@ -199,6 +203,15 @@ async function database() {
           created_at TEXT NOT NULL
         );
       `);
+
+      const weeklyColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(weekly_plan_days)");
+      if (!weeklyColumns.some((column) => column.name === "photo_uri")) {
+        await db.execAsync("ALTER TABLE weekly_plan_days ADD COLUMN photo_uri TEXT;");
+      }
+      const planColumns = await db.getAllAsync<{ name: string }>("PRAGMA table_info(plan_days)");
+      if (!planColumns.some((column) => column.name === "photo_uri")) {
+        await db.execAsync("ALTER TABLE plan_days ADD COLUMN photo_uri TEXT;");
+      }
 
       await db.runAsync("INSERT OR IGNORE INTO plan_meta (id, activated_on) VALUES (1, NULL)");
       const now = new Date().toISOString();
@@ -241,7 +254,7 @@ async function ensurePlanDays(db: SQLite.SQLiteDatabase, today = localDate()) {
   if (!meta?.activated_on) return;
 
   const week = await db.getAllAsync<WeeklyPlanDay>(
-    "SELECT weekday, kind, title, description FROM weekly_plan_days",
+    "SELECT weekday, kind, title, description, photo_uri AS photoUri FROM weekly_plan_days",
   );
   const byWeekday = new Map(week.map((day) => [day.weekday, day]));
   const horizon = addDays(today, 42);
@@ -250,11 +263,12 @@ async function ensurePlanDays(db: SQLite.SQLiteDatabase, today = localDate()) {
     const template = byWeekday.get(weekday(date));
     if (!template) throw new Error("Plan semanal incompleto.");
     await db.runAsync(
-      "INSERT OR IGNORE INTO plan_days (date, kind, title, description, planned) VALUES (?, ?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO plan_days (date, kind, title, description, photo_uri, planned) VALUES (?, ?, ?, ?, ?, ?)",
       date,
       template.kind,
       template.title,
       template.description,
+      template.photoUri,
       template.kind === "training" ? 1 : 0,
     );
   }
@@ -283,6 +297,7 @@ async function planMetrics(db: SQLite.SQLiteDatabase, today = localDate()) {
       p.kind,
       p.title,
       p.description,
+      p.photo_uri AS photoUri,
       p.planned,
       CASE WHEN p.kind = 'training' AND EXISTS (
         SELECT 1 FROM workouts w
@@ -314,7 +329,7 @@ export async function loadPlanSnapshot(today = localDate()): Promise<PlanSnapsho
   await ensurePlanDays(db, today);
 
   const week = await db.getAllAsync<WeeklyPlanDay>(`
-    SELECT weekday, kind, title, description
+    SELECT weekday, kind, title, description, photo_uri AS photoUri
     FROM weekly_plan_days
     ORDER BY CASE weekday WHEN 0 THEN 7 ELSE weekday END ASC
   `);
@@ -327,6 +342,7 @@ export async function loadPlanSnapshot(today = localDate()): Promise<PlanSnapsho
       p.kind,
       p.title,
       p.description,
+      p.photo_uri AS photoUri,
       p.planned,
       CASE WHEN p.kind = 'training' AND EXISTS (
         SELECT 1 FROM workouts w
@@ -357,6 +373,7 @@ export async function saveWeeklyPlanDay(
   kind: PlanKind,
   rawTitle: string,
   rawDescription: string,
+  photoUri: string | null = null,
   today = localDate(),
 ) {
   if (!Number.isInteger(weekdayValue) || weekdayValue < 0 || weekdayValue > 6) throw new Error("Día inválido.");
@@ -368,16 +385,18 @@ export async function saveWeeklyPlanDay(
     throw new Error("Pon un nombre de 2 a 80 caracteres para el entrenamiento.");
   }
   if (description.length > 400) throw new Error("La descripción no puede superar 400 caracteres.");
+  if (photoUri !== null && !photoUri.startsWith("file://")) throw new Error("La imagen del plan debe ser local.");
 
   const db = await database();
   const updatedAt = new Date().toISOString();
 
   await db.withTransactionAsync(async () => {
     await db.runAsync(
-      "UPDATE weekly_plan_days SET kind = ?, title = ?, description = ?, updated_at = ? WHERE weekday = ?",
+      "UPDATE weekly_plan_days SET kind = ?, title = ?, description = ?, photo_uri = ?, updated_at = ? WHERE weekday = ?",
       kind,
       kind === "training" ? title : "",
       description,
+      photoUri,
       updatedAt,
       weekdayValue,
     );
@@ -395,6 +414,7 @@ export async function saveWeeklyPlanDay(
       kind,
       title: kind === "training" ? title : "",
       description,
+      photoUri,
       effectiveFrom: today,
     });
   });
@@ -423,6 +443,7 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
       p.kind,
       p.title,
       p.description,
+      p.photo_uri AS photoUri,
       p.planned,
       CASE WHEN p.kind = 'training' AND EXISTS (
         SELECT 1 FROM workouts w
