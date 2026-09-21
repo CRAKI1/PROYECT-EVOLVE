@@ -13,25 +13,29 @@ import {
   completeWorkout,
   createQuickWorkout,
   loadToday,
-  localDate,
   type TodaySnapshot,
 } from "./src/database";
 import { LiveWorkout } from "./src/LiveWorkout";
+import { PlanWeek } from "./src/PlanWeek";
 
-type Tab = "today" | "training" | "nutrition" | "recovery" | "progress";
+type Tab = "today" | "plan" | "training" | "nutrition" | "recovery";
 
 const emptySnapshot: TodaySnapshot = {
   activeWorkout: null,
   completedToday: 0,
   pendingSync: 0,
+  todayPlan: null,
+  streakCurrent: 0,
+  streakLongest: 0,
+  adherencePercentage: null,
 };
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: "today", label: "Hoy" },
+  { id: "plan", label: "Plan" },
   { id: "training", label: "Entreno" },
   { id: "nutrition", label: "Nutrición" },
   { id: "recovery", label: "Recuperación" },
-  { id: "progress", label: "Progreso" },
 ];
 
 function dateLabel() {
@@ -93,6 +97,20 @@ export default function App() {
     }
   }
 
+  const planLabel =
+    snapshot.todayPlan?.kind === "training"
+      ? snapshot.todayPlan.title || "Entrenamiento"
+      : snapshot.todayPlan?.kind === "rest"
+        ? "Día de descanso"
+        : "Día libre";
+
+  const planBody =
+    snapshot.todayPlan?.kind === "training"
+      ? snapshot.todayPlan.description || "Sesión planificada para hoy."
+      : snapshot.todayPlan?.kind === "rest"
+        ? snapshot.todayPlan.description || "El descanso planificado mantiene tu racha."
+        : "No hay una obligación planificada para hoy.";
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#0A0D12" />
@@ -104,7 +122,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.3</Text>
+            <Text style={styles.levelValue}>v0.4</Text>
           </View>
         </View>
 
@@ -128,23 +146,50 @@ export default function App() {
             {tab === "today" ? (
               <>
                 <Text style={styles.eyebrow}>ESTADO DE HOY</Text>
-                <Text style={styles.hero}>Tu sistema empieza por datos reales, no por estimaciones.</Text>
+                <Text style={styles.hero}>Ejecuta el plan. Registra evidencia. Conserva el historial.</Text>
 
                 <View style={styles.statsRow}>
-                  <StatCard label="Sesiones" value={String(snapshot.completedToday)} />
-                  <StatCard label="Pendientes sync" value={String(snapshot.pendingSync)} />
-                  <StatCard label="Fecha local" value={localDate().slice(5)} />
+                  <StatCard label="Racha" value={snapshot.streakCurrent ? `${snapshot.streakCurrent}d` : "0d"} />
+                  <StatCard
+                    label="Adherencia"
+                    value={snapshot.adherencePercentage === null ? "—" : `${Math.round(snapshot.adherencePercentage)}%`}
+                  />
+                  <StatCard label="Sync pendiente" value={String(snapshot.pendingSync)} />
                 </View>
+
+                <Card>
+                  <Text style={styles.cardKicker}>
+                    {snapshot.todayPlan?.kind === "training"
+                      ? "PLAN DE HOY"
+                      : snapshot.todayPlan?.kind === "rest"
+                        ? "RECUPERACIÓN"
+                        : "SIN OBLIGACIÓN"}
+                  </Text>
+                  <Text style={styles.cardTitle}>{planLabel}</Text>
+                  <Text style={styles.cardBody}>{planBody}</Text>
+                  {snapshot.todayPlan?.kind === "training" ? (
+                    <Text style={styles.planStatus}>
+                      {snapshot.todayPlan.completed > 0 ? "✓ Cumplido hoy" : "Pendiente"}
+                    </Text>
+                  ) : null}
+                  <SecondaryButton label="Editar plan semanal" onPress={() => setTab("plan")} />
+                </Card>
 
                 <Card>
                   <Text style={styles.cardKicker}>ENTRENAMIENTO</Text>
                   <Text style={styles.cardTitle}>
-                    {snapshot.activeWorkout ? snapshot.activeWorkout.title : "Sin sesión activa"}
+                    {snapshot.activeWorkout
+                      ? snapshot.activeWorkout.title
+                      : snapshot.todayPlan?.kind === "training"
+                        ? snapshot.todayPlan.title
+                        : "Sesión libre"}
                   </Text>
                   <Text style={styles.cardBody}>
                     {snapshot.activeWorkout
                       ? "La sesión, ejercicios y series están guardados en SQLite y siguen disponibles aunque cierres la app."
-                      : "Inicia una sesión local y registra ejercicios, series, carga, repeticiones y RIR sin depender de internet."}
+                      : snapshot.todayPlan?.kind === "training"
+                        ? "Al iniciar, la sesión toma automáticamente el nombre del plan de hoy."
+                        : "Puedes entrenar de forma libre. Una sesión extra no convierte un descanso planificado en obligación."}
                   </Text>
                   <PrimaryButton
                     label={snapshot.activeWorkout ? "Continuar sesión" : "Iniciar sesión"}
@@ -154,13 +199,21 @@ export default function App() {
                 </Card>
 
                 <View style={styles.grid}>
+                  <MiniCard
+                    title="Mejor racha"
+                    body={snapshot.streakLongest ? `${snapshot.streakLongest} días registrados` : "Todavía sin historial suficiente."}
+                  />
+                  <MiniCard
+                    title="Sesiones hoy"
+                    body={snapshot.completedToday ? `${snapshot.completedToday} completada(s)` : "Todavía ninguna completada."}
+                  />
                   <MiniCard title="Nutrición" body="Registro manual, código de barras y foto con confirmación." />
                   <MiniCard title="Recuperación" body="Sueño, pasos, energía y carga reciente." />
-                  <MiniCard title="Coach" body="IA contextual sobre hechos versionados, no sobre memoria inventada." />
-                  <MiniCard title="Avatar" body="Capa 3D posterior, separada de las métricas de salud." />
                 </View>
               </>
             ) : null}
+
+            {tab === "plan" ? <PlanWeek onChanged={refresh} /> : null}
 
             {tab === "training" ? (
               snapshot.activeWorkout ? (
@@ -184,9 +237,19 @@ export default function App() {
               )
             ) : null}
 
-            {tab === "nutrition" ? <ModulePlaceholder title="Nutrición" detail="Base lista para porciones, macros, alimentos, recetas y confirmación de escaneos." /> : null}
-            {tab === "recovery" ? <ModulePlaceholder title="Recuperación" detail="Base lista para sueño, pasos, energía, soreness y readiness determinista." /> : null}
-            {tab === "progress" ? <ModulePlaceholder title="Progreso" detail="Aquí vivirán PRs, tendencias, adherencia, metas y revisiones semanales." /> : null}
+            {tab === "nutrition" ? (
+              <ModulePlaceholder
+                title="Nutrición"
+                detail="Base preparada para porciones, macros, alimentos, recetas, escaneo de código de barras y confirmación de fotos."
+              />
+            ) : null}
+
+            {tab === "recovery" ? (
+              <ModulePlaceholder
+                title="Recuperación"
+                detail="Base preparada para sueño, pasos, energía, soreness y readiness determinista."
+              />
+            ) : null}
           </ScrollView>
         )}
 
@@ -231,6 +294,18 @@ function PrimaryButton({
       ]}
     >
       <Text style={styles.primaryButtonText}>{disabled ? "Guardando…" : label}</Text>
+    </Pressable>
+  );
+}
+
+function SecondaryButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [styles.secondaryButton, pressed && styles.primaryButtonPressed]}
+    >
+      <Text style={styles.secondaryButtonText}>{label}</Text>
     </Pressable>
   );
 }
@@ -320,6 +395,7 @@ const styles = StyleSheet.create({
   cardKicker: { color: "#6DE0A8", fontSize: 10, fontWeight: "900", letterSpacing: 1.5 },
   cardTitle: { color: "#F4F7FB", fontSize: 22, fontWeight: "900" },
   cardBody: { color: "#AAB4C2", fontSize: 14, lineHeight: 21 },
+  planStatus: { color: "#AFCBEE", fontSize: 12, fontWeight: "900" },
   primaryButton: {
     backgroundColor: "#2E8BFF",
     minHeight: 48,
@@ -329,6 +405,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 18,
   },
+  secondaryButton: {
+    minHeight: 44,
+    borderRadius: 14,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: "#2B3A4E",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 18,
+  },
+  secondaryButtonText: { color: "#B9CCE3", fontWeight: "900", fontSize: 13 },
   primaryButtonPressed: { opacity: 0.82 },
   primaryButtonDisabled: { opacity: 0.45 },
   primaryButtonText: { color: "#FFFFFF", fontWeight: "900", fontSize: 14 },
