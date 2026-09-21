@@ -22,7 +22,7 @@ export function nextPrescription(p: Prescription, sessions: Exposure[], options:
     check(x.rir === null || (finite(x.rir) && x.rir >= 0 && x.rir <= 10), "Invalid set RIR");
   }
   const evidence = recent.map(s => s.id);
-  const last = recent[recent.length - 1];
+  const last = recent[recent.length - 1]!;
   if (last.sets.length !== p.sets || last.sets.some(s => !s.completed))
     return result("hold", p.load, ["incomplete_session"], evidence);
   if (last.sets.some(s => s.load !== p.load))
