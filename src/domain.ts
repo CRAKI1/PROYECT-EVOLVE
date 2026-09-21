@@ -87,3 +87,45 @@ export function agePolicy(age: number | null) {
   const protectedMode = age === null || age < 18;
   return { protectedMode, automatedCalorieRestriction: false, aiAppearanceAssessment: !protectedMode, appearanceRewards: false };
 }
+
+
+export type RecoverySignals = {
+  sleepMinutes: number | null;
+  steps: number | null;
+  energy: number | null;
+  soreness: number | null;
+};
+
+export type RecoveryState = {
+  status: "unknown" | "caution" | "neutral" | "positive";
+  reasons: string[];
+  completeness: number;
+  policyVersion: "subjective-recovery-v1";
+};
+
+export function recoveryState(signals: RecoverySignals): RecoveryState {
+  check(signals.sleepMinutes === null || (Number.isInteger(signals.sleepMinutes) && signals.sleepMinutes >= 0 && signals.sleepMinutes <= 1440), "Invalid sleep");
+  check(signals.steps === null || (Number.isInteger(signals.steps) && signals.steps >= 0 && signals.steps <= 200000), "Invalid steps");
+  check(signals.energy === null || (Number.isInteger(signals.energy) && signals.energy >= 1 && signals.energy <= 5), "Invalid energy");
+  check(signals.soreness === null || (Number.isInteger(signals.soreness) && signals.soreness >= 1 && signals.soreness <= 5), "Invalid soreness");
+
+  const observed = [signals.sleepMinutes, signals.steps, signals.energy, signals.soreness].filter(value => value !== null).length;
+  const completeness = observed / 4 * 100;
+  const result = (status: RecoveryState["status"], reasons: string[]): RecoveryState => ({
+    status,
+    reasons,
+    completeness,
+    policyVersion: "subjective-recovery-v1",
+  });
+
+  if (signals.energy === null || signals.soreness === null)
+    return result("unknown", ["subjective_signals_incomplete"]);
+  if (signals.energy <= 2 || signals.soreness >= 4)
+    return result("caution", [
+      ...(signals.energy <= 2 ? ["low_reported_energy"] : []),
+      ...(signals.soreness >= 4 ? ["high_reported_soreness"] : []),
+    ]);
+  if (signals.energy >= 4 && signals.soreness <= 2)
+    return result("positive", ["favorable_subjective_signals"]);
+  return result("neutral", ["mixed_subjective_signals"]);
+}

@@ -18,6 +18,7 @@ import {
 } from "./src/database";
 import { LiveWorkout } from "./src/LiveWorkout";
 import { PlanWeek } from "./src/PlanWeek";
+import { RecoveryPanel } from "./src/RecoveryPanel";
 
 type Tab = "today" | "plan" | "training" | "nutrition" | "recovery";
 
@@ -29,6 +30,8 @@ const emptySnapshot: TodaySnapshot = {
   streakCurrent: 0,
   streakLongest: 0,
   adherencePercentage: null,
+  recoveryStatus: "unknown",
+  recoveryCompleteness: 0,
 };
 
 const tabs: Array<{ id: Tab; label: string }> = [
@@ -123,7 +126,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.4</Text>
+            <Text style={styles.levelValue}>v0.5</Text>
           </View>
         </View>
 
@@ -216,7 +219,10 @@ export default function App() {
                     body={snapshot.completedToday ? `${snapshot.completedToday} completada(s)` : "Todavía ninguna completada."}
                   />
                   <MiniCard title="Nutrición" body="Registro manual, código de barras y foto con confirmación." />
-                  <MiniCard title="Recuperación" body="Sueño, pasos, energía y carga reciente." />
+                  <MiniCard
+                    title="Recuperación"
+                    body={recoveryLabel(snapshot.recoveryStatus, snapshot.recoveryCompleteness)}
+                  />
                 </View>
               </>
             ) : null}
@@ -252,12 +258,7 @@ export default function App() {
               />
             ) : null}
 
-            {tab === "recovery" ? (
-              <ModulePlaceholder
-                title="Recuperación"
-                detail="Base preparada para sueño, pasos, energía, soreness y readiness determinista."
-              />
-            ) : null}
+            {tab === "recovery" ? <RecoveryPanel onChanged={refresh} /> : null}
           </ScrollView>
         )}
 
@@ -275,6 +276,13 @@ export default function App() {
       </View>
     </SafeAreaView>
   );
+}
+
+function recoveryLabel(status: TodaySnapshot["recoveryStatus"], completeness: number) {
+  if (status === "positive") return `Señales favorables · ${Math.round(completeness)}% registrado`;
+  if (status === "caution") return `Cautela · ${Math.round(completeness)}% registrado`;
+  if (status === "neutral") return `Intermedio · ${Math.round(completeness)}% registrado`;
+  return completeness ? `Incompleto · ${Math.round(completeness)}% registrado` : "Registra las señales de hoy.";
 }
 
 function Card({ children }: { children: React.ReactNode }) {

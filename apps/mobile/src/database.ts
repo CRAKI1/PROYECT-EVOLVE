@@ -1,5 +1,5 @@
 import * as SQLite from "expo-sqlite";
-import { adherence } from "../../../src/domain";
+import { adherence, recoveryState, type RecoverySignals, type RecoveryState } from "../../../src/domain";
 
 export type WorkoutRow = {
   id: string;
@@ -65,6 +65,12 @@ export type PlanSnapshot = {
   };
 };
 
+export type RecoverySnapshot = {
+  date: string;
+  signals: RecoverySignals;
+  state: RecoveryState;
+};
+
 export type TodaySnapshot = {
   activeWorkout: WorkoutRow | null;
   completedToday: number;
@@ -73,6 +79,8 @@ export type TodaySnapshot = {
   streakCurrent: number;
   streakLongest: number;
   adherencePercentage: number | null;
+  recoveryStatus: RecoveryState["status"];
+  recoveryCompleteness: number;
 };
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -427,6 +435,59 @@ export async function saveWeeklyPlanDay(
   await ensurePlanDays(db, today);
 }
 
+export async function loadRecovery(date = localDate()): Promise<RecoverySnapshot> {
+  parseDate(date);
+  const db = await database();
+  const row = await db.getFirstAsync<{
+    sleep_minutes: number | null;
+    steps: number | null;
+    energy: number | null;
+    soreness: number | null;
+  }>(
+    "SELECT sleep_minutes, steps, energy, soreness FROM daily_signals WHERE date = ?",
+    date,
+  );
+  const signals: RecoverySignals = {
+    sleepMinutes: row?.sleep_minutes ?? null,
+    steps: row?.steps ?? null,
+    energy: row?.energy ?? null,
+    soreness: row?.soreness ?? null,
+  };
+  return { date, signals, state: recoveryState(signals) };
+}
+
+export async function saveRecovery(
+  signals: RecoverySignals,
+  date = localDate(),
+): Promise<RecoverySnapshot> {
+  parseDate(date);
+  const state = recoveryState(signals);
+  const db = await database();
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `INSERT INTO daily_signals (date, sleep_minutes, steps, energy, soreness)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(date) DO UPDATE SET
+         sleep_minutes = excluded.sleep_minutes,
+         steps = excluded.steps,
+         energy = excluded.energy,
+         soreness = excluded.soreness`,
+      date,
+      signals.sleepMinutes,
+      signals.steps,
+      signals.energy,
+      signals.soreness,
+    );
+    await queue(db, "daily_signal", date, "upsert", {
+      date,
+      ...signals,
+      recoveryState: state.status,
+      policyVersion: state.policyVersion,
+    });
+  });
+  return { date, signals, state };
+}
+
 export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
   const db = await database();
   await ensurePlanDays(db, date);
@@ -458,6 +519,21 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     WHERE p.date = ?
   `, date);
   const metrics = await planMetrics(db, date);
+  const recoveryRow = await db.getFirstAsync<{
+    sleep_minutes: number | null;
+    steps: number | null;
+    energy: number | null;
+    soreness: number | null;
+  }>(
+    "SELECT sleep_minutes, steps, energy, soreness FROM daily_signals WHERE date = ?",
+    date,
+  );
+  const recovery = recoveryState({
+    sleepMinutes: recoveryRow?.sleep_minutes ?? null,
+    steps: recoveryRow?.steps ?? null,
+    energy: recoveryRow?.energy ?? null,
+    soreness: recoveryRow?.soreness ?? null,
+  });
 
   return {
     activeWorkout: activeWorkout ?? null,
@@ -467,6 +543,8 @@ export async function loadToday(date = localDate()): Promise<TodaySnapshot> {
     streakCurrent: metrics.current,
     streakLongest: metrics.longest,
     adherencePercentage: metrics.percentage,
+    recoveryStatus: recovery.status,
+    recoveryCompleteness: recovery.completeness,
   };
 }
 

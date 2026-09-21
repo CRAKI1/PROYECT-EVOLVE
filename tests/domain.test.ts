@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nextPrescription, adherence, toKg, scaleNutrients, agePolicy } from "../src/domain.ts";
+import { nextPrescription, adherence, toKg, scaleNutrients, agePolicy, recoveryState } from "../src/domain.ts";
 import type { Prescription, Exposure } from "../src/domain.ts";
 const p: Prescription = { contextKey:"test-machine-a", load:20, sets:3, minReps:8, maxReps:10, targetRir:2, assisted:false };
 const exposure = (id: string, reps=10, rir: number|null=2): Exposure => ({id,contextKey:p.contextKey,sets:Array.from({length:3},()=>({load:20,reps,rir,completed:true}))});
@@ -46,4 +46,23 @@ test("unknown age and minors protected",()=>{
   assert.equal(agePolicy(null).protectedMode,true);
   assert.equal(agePolicy(14).aiAppearanceAssessment,false);
   assert.equal(agePolicy(20).appearanceRewards,false);
+});
+
+test("recovery state flags low energy or high soreness as caution",()=>{
+  assert.deepEqual(
+    recoveryState({sleepMinutes:480,steps:8000,energy:2,soreness:4}).status,
+    "caution",
+  );
+});
+test("recovery state can be positive from favorable subjective signals",()=>{
+  const r=recoveryState({sleepMinutes:null,steps:null,energy:5,soreness:1});
+  assert.equal(r.status,"positive"); assert.equal(r.completeness,50);
+});
+test("sleep and steps alone do not invent readiness",()=>{
+  assert.equal(recoveryState({sleepMinutes:480,steps:10000,energy:null,soreness:null}).status,"unknown");
+});
+test("invalid recovery signals rejected",()=>{
+  assert.throws(()=>recoveryState({sleepMinutes:1500,steps:0,energy:3,soreness:3}));
+  assert.throws(()=>recoveryState({sleepMinutes:480,steps:-1,energy:3,soreness:3}));
+  assert.throws(()=>recoveryState({sleepMinutes:480,steps:0,energy:6,soreness:3}));
 });
