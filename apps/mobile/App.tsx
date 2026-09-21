@@ -129,7 +129,7 @@ export default function App() {
           </View>
           <View style={styles.levelBadge}>
             <Text style={styles.levelLabel}>LOCAL</Text>
-            <Text style={styles.levelValue}>v0.7</Text>
+            <Text style={styles.levelValue}>v0.8</Text>
           </View>
         </View>
 

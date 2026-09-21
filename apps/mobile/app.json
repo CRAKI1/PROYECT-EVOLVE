@@ -20,6 +20,15 @@
           "photosPermission": "Project Evolve accede a tus fotos solo para adjuntar una imagen privada a tu plan semanal.",
           "microphonePermission": false
         }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Project Evolve usa la cámara únicamente cuando decides escanear un código de barras.",
+          "microphonePermission": "Project Evolve no necesita usar el micrófono.",
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
+        }
       ]
     ]
   }

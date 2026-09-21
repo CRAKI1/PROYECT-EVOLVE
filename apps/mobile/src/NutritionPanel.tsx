@@ -13,6 +13,7 @@ import {
   type NutritionDaySnapshot,
   type NutritionMeal,
 } from "./database";
+import { BarcodeNutritionFlow } from "./BarcodeNutritionFlow";
 
 const meals: Array<{ id: NutritionMeal; label: string }> = [
   { id: "preworkout", label: "Pre" },
@@ -175,10 +176,18 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
         </Pressable>
       </View>
 
+      <BarcodeNutritionFlow
+        meal={meal}
+        onSaved={async (next) => {
+          setSnapshot(next);
+          await onChanged();
+        }}
+      />
+
       <View style={styles.futureCard}>
-        <Text style={styles.futureTitle}>Escaneo y foto</Text>
+        <Text style={styles.futureTitle}>Foto de comida</Text>
         <Text style={styles.caption}>
-          La estructura ya distingue la fuente del registro. Código de barras y foto se conectarán a este mismo historial, con confirmación antes de guardar.
+          Siguiente adaptador: foto con estimación y confirmación manual antes de guardar.
         </Text>
       </View>
 
@@ -191,6 +200,7 @@ export function NutritionPanel({ onChanged }: { onChanged: () => Promise<void> }
               <Text style={styles.entryName}>{entry.name}</Text>
               <Text style={styles.entryMeta}>
                 {round1(entry.grams)} g · {Math.round(entry.calories)} kcal · P {round1(entry.protein)} · C {round1(entry.carbs)} · G {round1(entry.fat)}
+                {entry.source === "barcode" && entry.barcode ? ` · código ${entry.barcode}` : ""}
               </Text>
             </View>
             <Pressable
