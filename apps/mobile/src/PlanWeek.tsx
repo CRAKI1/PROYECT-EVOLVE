@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -15,6 +16,7 @@ import {
   type PlanSnapshot,
   type WeeklyPlanDay,
 } from "./database";
+import { pickAndStorePlanImage, removeStoredPlanImage } from "./media";
 
 const labels: Record<number, string> = {
   1: "Lunes",
@@ -57,7 +59,9 @@ export function PlanWeek({ onChanged }: { onChanged: () => Promise<void> }) {
     try {
       setSavingWeekday(day.weekday);
       setError(null);
-      await saveWeeklyPlanDay(day.weekday, day.kind, day.title, day.description);
+      const previousPhoto = snapshot?.week.find((item) => item.weekday === day.weekday)?.photoUri ?? null;
+      await saveWeeklyPlanDay(day.weekday, day.kind, day.title, day.description, day.photoUri);
+      if (previousPhoto && previousPhoto !== day.photoUri) removeStoredPlanImage(previousPhoto);
       await refresh();
       await onChanged();
     } catch (cause) {
@@ -132,14 +136,22 @@ function DayEditor({
   const [kind, setKind] = useState<PlanKind>(day.kind);
   const [title, setTitle] = useState(day.title);
   const [description, setDescription] = useState(day.description);
+  const [photoUri, setPhotoUri] = useState<string | null>(day.photoUri);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   useEffect(() => {
     setKind(day.kind);
     setTitle(day.title);
     setDescription(day.description);
-  }, [day.description, day.kind, day.title]);
+    setPhotoUri(day.photoUri);
+  }, [day.description, day.kind, day.photoUri, day.title]);
 
-  const dirty = kind !== day.kind || title !== day.title || description !== day.description;
+  const dirty =
+    kind !== day.kind ||
+    title !== day.title ||
+    description !== day.description ||
+    photoUri !== day.photoUri;
   const status = calendarStatus(calendar);
 
   return (
@@ -173,6 +185,50 @@ function DayEditor({
         />
       ) : null}
 
+      {photoUri ? (
+        <Image source={{ uri: photoUri }} style={styles.planImage} resizeMode="cover" />
+      ) : null}
+
+      <View style={styles.photoRow}>
+        <Pressable
+          accessibilityRole="button"
+          disabled={photoBusy}
+          onPress={() => {
+            void (async () => {
+              try {
+                setPhotoBusy(true);
+                setPhotoError(null);
+                const selected = await pickAndStorePlanImage(day.weekday);
+                if (selected) setPhotoUri(selected);
+              } catch (cause) {
+                setPhotoError(cause instanceof Error ? cause.message : "No se pudo importar la imagen.");
+              } finally {
+                setPhotoBusy(false);
+              }
+            })();
+          }}
+          style={({ pressed }) => [
+            styles.photoButton,
+            pressed && styles.pressed,
+            photoBusy && styles.disabled,
+          ]}
+        >
+          <Text style={styles.photoButtonText}>{photoBusy ? "Abriendo…" : photoUri ? "Cambiar foto" : "Añadir foto"}</Text>
+        </Pressable>
+
+        {photoUri ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setPhotoUri(null)}
+            style={({ pressed }) => [styles.removePhotoButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.removePhotoText}>Quitar</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
+      {photoError ? <Text style={styles.photoError}>{photoError}</Text> : null}
+
       <TextInput
         value={description}
         onChangeText={setDescription}
@@ -192,7 +248,7 @@ function DayEditor({
       <Pressable
         accessibilityRole="button"
         disabled={saving || !dirty}
-        onPress={() => void onSave({ ...day, kind, title, description })}
+        onPress={() => void onSave({ ...day, kind, title, description, photoUri })}
         style={({ pressed }) => [
           styles.saveButton,
           pressed && styles.pressed,
@@ -335,6 +391,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
   },
   descriptionInput: { minHeight: 72, textAlignVertical: "top" },
+  planImage: {
+    width: "100%",
+    height: 148,
+    borderRadius: 15,
+    backgroundColor: "#0B1018",
+  },
+  photoRow: { flexDirection: "row", gap: 8 },
+  photoButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#31445E",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  photoButtonText: { color: "#B8D8FF", fontSize: 12, fontWeight: "900" },
+  removePhotoButton: {
+    minWidth: 72,
+    minHeight: 42,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#4B2A32",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+  },
+  removePhotoText: { color: "#E5A8B5", fontSize: 11, fontWeight: "900" },
+  photoError: { color: "#FFB5C0", fontSize: 11, lineHeight: 16 },
   saveButton: {
     minHeight: 44,
     borderRadius: 13,
